@@ -276,6 +276,12 @@ EOF
 main() {
     local command="${1:-validate}"
     
+    # 如果第一个参数是文件路径，则默认为 validate 命令
+    if [[ -f "$command" ]]; then
+        validate_config "$command"
+        return $?
+    fi
+    
     case "$command" in
         validate)
             validate_config "${2:-}"

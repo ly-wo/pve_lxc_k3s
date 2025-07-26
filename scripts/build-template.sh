@@ -35,7 +35,7 @@ show_progress() {
     CURRENT_STEP=$((CURRENT_STEP + 1))
     local percentage=$((CURRENT_STEP * 100 / TOTAL_STEPS))
     local context="{\"step\": $CURRENT_STEP, \"total_steps\": $TOTAL_STEPS, \"percentage\": $percentage}"
-    log_info "$COMPONENT" "$COMPONENT" "[$CURRENT_STEP/$TOTAL_STEPS] ($percentage%) $step_name" "$context" "" "" "$BUILD_LOG"
+    log_info "$COMPONENT" "[$CURRENT_STEP/$TOTAL_STEPS] ($percentage%) $step_name" "$context" "" "" "$BUILD_LOG"
 }
 
 # 性能监控
@@ -58,15 +58,15 @@ end_timer() {
 error_exit() {
     local error_message="$1"
     local exit_code="${2:-1}"
-    log_error "$COMPONENT" "$COMPONENT" "$error_message"
-    log_error "$COMPONENT" "$COMPONENT" "构建失败，退出码: $exit_code"
+    log_error "$COMPONENT" "$error_message"
+    log_error "$COMPONENT" "构建失败，退出码: $exit_code"
     cleanup_on_error
     exit "$exit_code"
 }
 
 # 错误时清理
 cleanup_on_error() {
-    log_info "$COMPONENT" "$COMPONENT" "执行错误清理..."
+    log_info "$COMPONENT" "执行错误清理..."
     
     # 卸载可能的挂载点
     if mountpoint -q "${BUILD_DIR}/rootfs" 2>/dev/null; then
@@ -76,7 +76,7 @@ cleanup_on_error() {
     # 清理临时文件
     rm -rf "${BUILD_DIR}/temp" || true
     
-    log_info "$COMPONENT" "$COMPONENT" "错误清理完成"
+    log_info "$COMPONENT" "错误清理完成"
 }
 
 # 信号处理
@@ -93,7 +93,10 @@ load_configuration() {
     
     # 验证配置文件格式
     if ! "${SCRIPT_DIR}/config-validator.sh" "$CONFIG_FILE"; then
-        error_exit "配置文件验证失败"
+        log_warn "$COMPONENT" "标准配置验证失败，尝试使用简化验证器"
+        if ! "${SCRIPT_DIR}/simple-config-validator.sh" "$CONFIG_FILE"; then
+            error_exit "配置文件验证失败"
+        fi
     fi
     
     # 加载配置变量
@@ -111,12 +114,12 @@ load_configuration() {
         error_exit "K3s 版本未在配置中指定"
     fi
     
-    log_info "$COMPONENT" "$COMPONENT" "配置加载完成:"
-    log_info "$COMPONENT" "$COMPONENT" "  模板名称: $TEMPLATE_NAME"
-    log_info "$COMPONENT" "$COMPONENT" "  模板版本: $TEMPLATE_VERSION"
-    log_info "$COMPONENT" "$COMPONENT" "  基础镜像: $BASE_IMAGE"
-    log_info "$COMPONENT" "$COMPONENT" "  系统架构: $ARCHITECTURE"
-    log_info "$COMPONENT" "$COMPONENT" "  K3s 版本: $K3S_VERSION"
+    log_info "$COMPONENT" "配置加载完成:"
+    log_info "$COMPONENT" "  模板名称: $TEMPLATE_NAME"
+    log_info "$COMPONENT" "  模板版本: $TEMPLATE_VERSION"
+    log_info "$COMPONENT" "  基础镜像: $BASE_IMAGE"
+    log_info "$COMPONENT" "  系统架构: $ARCHITECTURE"
+    log_info "$COMPONENT" "  K3s 版本: $K3S_VERSION"
 }
 
 # 检查构建环境

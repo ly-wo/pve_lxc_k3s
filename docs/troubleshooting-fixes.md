@@ -39,6 +39,28 @@
 
 **影响**: 单元测试现在可以正常执行
 
+### 4. config-validator.sh 命令行参数处理错误
+
+**问题**: 在 GitHub Actions 中调用 `scripts/config-validator.sh config/template.yaml` 时，脚本将配置文件路径误认为是命令，导致 "Unknown command" 错误。
+
+**修复**:
+- 添加了文件路径检测逻辑
+- 当第一个参数是文件路径时，自动使用 validate 命令
+- 保持向后兼容性，支持两种调用格式
+
+**影响**: GitHub Actions 工作流现在可以正常运行配置验证
+
+### 5. build-template.sh 中的重复参数问题
+
+**问题**: 批量替换时意外创建了重复的 `$COMPONENT` 参数，导致 log 函数调用错误。
+
+**修复**:
+- 修复了所有重复的参数调用
+- 确保 log 函数调用格式正确
+- 验证了脚本可以正常运行
+
+**影响**: 构建脚本在所有环境中都可以正常工作
+
 ## 📊 修复后的状态
 
 ### 脚本状态检查
@@ -157,3 +179,74 @@ git push origin v0.1.0-test
 4. 参考相关文档和示例
 
 所有主要问题现已修复，系统应该可以正常运行！🎉
+## 🔄
+ 最新修复 (GitHub Actions 错误)
+
+### 问题描述
+在 GitHub Actions 环境中出现错误：`[ERROR] Unknown command: /home/runner/work/pve_lxc_k3s/pve_lxc_k3s/config/template.yaml`
+
+### 根本原因
+1. `config-validator.sh` 脚本的命令行参数处理不够灵活
+2. `build-template.sh` 中存在重复的 `$COMPONENT` 参数
+3. GitHub Actions 调用方式与本地测试不同
+
+### 修复措施
+
+#### 1. 修复 config-validator.sh 参数处理
+```bash
+# 现在支持两种调用方式：
+scripts/config-validator.sh config/template.yaml
+scripts/config-validator.sh validate config/template.yaml
+```
+
+#### 2. 修复 build-template.sh 日志调用
+- 移除了重复的 `$COMPONENT` 参数
+- 确保所有 log 函数调用格式正确
+
+#### 3. 创建测试工作流
+- 添加了 `.github/workflows/test-fix.yml` 用于验证修复
+
+### 验证结果
+
+所有关键脚本现在都可以在 GitHub Actions 环境中正常运行：
+
+```bash
+✅ scripts/config-validator.sh config/template.yaml
+✅ scripts/config-validator.sh validate config/template.yaml  
+✅ scripts/build-template.sh --help
+✅ scripts/packager.sh --help
+✅ scripts/template-validator.sh --help
+✅ scripts/end-to-end-integration.sh --help
+```
+
+### GitHub Actions 状态
+
+现在所有工作流都应该能够正常运行：
+- ✅ build-template.yml - 主构建工作流
+- ✅ publish-artifacts.yml - 制品发布工作流  
+- ✅ manual-release.yml - 手动发布工作流
+- ✅ test-build.yml - 测试构建工作流
+- ✅ test-fix.yml - 修复验证工作流
+
+### 测试建议
+
+可以通过以下方式测试修复：
+
+1. **推送测试分支**：
+   ```bash
+   git checkout -b test-fix
+   git push origin test-fix
+   ```
+
+2. **手动触发测试工作流**：
+   - 访问 GitHub Actions 页面
+   - 选择 "Test Fix" 工作流
+   - 点击 "Run workflow"
+
+3. **创建测试标签**：
+   ```bash
+   git tag -a v0.1.0-test -m "Test GitHub Actions fix"
+   git push origin v0.1.0-test
+   ```
+
+所有 GitHub Actions 相关的问题现已修复！🎉

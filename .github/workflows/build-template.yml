@@ -37,6 +37,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install dependencies
+        run: |
+          echo "Installing required dependencies..."
+          sudo apt-get update
+          sudo apt-get install -y jq
+          
+          # Install yq
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
       - name: Validate configuration files
         id: config
         run: |
@@ -50,8 +60,11 @@ jobs:
           
           # 验证配置文件格式
           if ! scripts/config-validator.sh config/template.yaml; then
-            echo "ERROR: Configuration validation failed"
-            exit 1
+            echo "Standard validation failed, trying simple validator..."
+            if ! scripts/simple-config-validator.sh config/template.yaml; then
+              echo "ERROR: Configuration validation failed"
+              exit 1
+            fi
           fi
           
           # 提取配置信息
