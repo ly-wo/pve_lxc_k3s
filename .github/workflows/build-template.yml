@@ -1,0 +1,518 @@
+name: Build PVE LXC K3s Template
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      debug_enabled:
+        description: 'Enable debug mode'
+        required: false
+        default: 'false'
+        type: boolean
+      skip_tests:
+        description: 'Skip tests'
+        required: false
+        default: 'false'
+        type: boolean
+
+env:
+  TEMPLATE_NAME: alpine-k3s
+  BUILD_CACHE_KEY: build-cache-v1
+  REGISTRY: ghcr.io
+
+jobs:
+  # 配置验证作业
+  validate-config:
+    name: Validate Configuration
+    runs-on: ubuntu-latest
+    outputs:
+      template-name: ${{ steps.config.outputs.template-name }}
+      template-version: ${{ steps.config.outputs.template-version }}
+      k3s-version: ${{ steps.config.outputs.k3s-version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate configuration files
+        id: config
+        run: |
+          echo "Validating configuration files..."
+          
+          # 检查配置文件是否存在
+          if [[ ! -f "config/template.yaml" ]]; then
+            echo "ERROR: Configuration file config/template.yaml not found"
+            exit 1
+          fi
+          
+          # 验证配置文件格式
+          if ! scripts/config-validator.sh config/template.yaml; then
+            echo "ERROR: Configuration validation failed"
+            exit 1
+          fi
+          
+          # 提取配置信息
+          source scripts/config-loader.sh
+          TEMPLATE_NAME=$(get_config "template.name" "alpine-k3s")
+          TEMPLATE_VERSION=$(get_config "template.version" "1.0.0")
+          K3S_VERSION=$(get_config "k3s.version")
+          
+          # 输出配置信息
+          echo "template-name=$TEMPLATE_NAME" >> $GITHUB_OUTPUT
+          echo "template-version=$TEMPLATE_VERSION" >> $GITHUB_OUTPUT
+          echo "k3s-version=$K3S_VERSION" >> $GITHUB_OUTPUT
+          
+          echo "Configuration validation passed:"
+          echo "  Template Name: $TEMPLATE_NAME"
+          echo "  Template Version: $TEMPLATE_VERSION"
+          echo "  K3s Version: $K3S_VERSION"
+
+  # 代码质量检查作业
+  code-quality:
+    name: Code Quality Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck
+        run: |
+          echo "Running shellcheck on all shell scripts..."
+          find scripts/ -name "*.sh" -type f -exec shellcheck {} \;
+          
+          # 检查测试脚本
+          if [[ -d tests/ ]]; then
+            find tests/ -name "*.sh" -type f -exec shellcheck {} \;
+          fi
+
+      - name: Check script permissions
+        run: |
+          echo "Checking script permissions..."
+          find scripts/ -name "*.sh" -type f ! -executable -exec echo "Warning: {} is not executable" \;
+
+  # 单元测试作业
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_tests }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install test dependencies
+        run: |
+          # 安装 bats 测试框架
+          sudo apt-get update
+          sudo apt-get install -y bats
+
+      - name: Run unit tests
+        run: |
+          echo "Running unit tests..."
+          if [[ -f tests/test-config.bats ]]; then
+            bats tests/test-config.bats
+          else
+            echo "No unit tests found, skipping..."
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: |
+            test-results/
+            logs/
+          retention-days: 7
+
+  # 构建作业
+  build-template:
+    name: Build Template
+    runs-on: ubuntu-latest
+    needs: [validate-config, code-quality]
+    outputs:
+      template-file: ${{ steps.build.outputs.template-file }}
+      template-size: ${{ steps.build.outputs.template-size }}
+      build-time: ${{ steps.build.outputs.build-time }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up build environment
+        run: |
+          echo "Setting up build environment..."
+          
+          # 创建必要的目录
+          mkdir -p .build .cache logs output
+          
+          # 安装构建依赖
+          sudo apt-get update
+          sudo apt-get install -y \
+            debootstrap \
+            qemu-user-static \
+            binfmt-support \
+            systemd-container \
+            curl \
+            wget \
+            tar \
+            gzip \
+            xz-utils
+
+      - name: Cache build dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache
+            ~/.cache
+          key: ${{ env.BUILD_CACHE_KEY }}-${{ runner.os }}-${{ hashFiles('config/template.yaml') }}
+          restore-keys: |
+            ${{ env.BUILD_CACHE_KEY }}-${{ runner.os }}-
+
+      - name: Build template
+        id: build
+        env:
+          DEBUG: ${{ inputs.debug_enabled && 'true' || 'false' }}
+        run: |
+          echo "Starting template build..."
+          BUILD_START_TIME=$(date +%s)
+          
+          # 设置权限
+          chmod +x scripts/*.sh
+          
+          # 执行构建
+          if [[ "$DEBUG" == "true" ]]; then
+            echo "Debug mode enabled"
+            sudo -E scripts/build-template.sh --debug
+          else
+            sudo -E scripts/build-template.sh
+          fi
+          
+          BUILD_END_TIME=$(date +%s)
+          BUILD_TIME=$((BUILD_END_TIME - BUILD_START_TIME))
+          
+          echo "Build completed in ${BUILD_TIME} seconds"
+          echo "build-time=${BUILD_TIME}" >> $GITHUB_OUTPUT
+
+      - name: Package template
+        id: package
+        run: |
+          echo "Packaging template..."
+          
+          # 执行打包
+          sudo scripts/packager.sh package
+          
+          # 获取生成的模板文件信息
+          TEMPLATE_FILE=$(find output/ -name "*.tar.gz" -type f | head -n1)
+          if [[ -n "$TEMPLATE_FILE" ]]; then
+            TEMPLATE_SIZE=$(du -h "$TEMPLATE_FILE" | cut -f1)
+            echo "template-file=$TEMPLATE_FILE" >> $GITHUB_OUTPUT
+            echo "template-size=$TEMPLATE_SIZE" >> $GITHUB_OUTPUT
+            echo "Template packaged: $TEMPLATE_FILE ($TEMPLATE_SIZE)"
+          else
+            echo "ERROR: No template file found in output directory"
+            exit 1
+          fi
+
+      - name: Validate template
+        run: |
+          echo "Validating template package..."
+          
+          # 执行模板验证
+          if ! scripts/template-validator.sh validate; then
+            echo "ERROR: Template validation failed"
+            exit 1
+          fi
+          
+          echo "Template validation passed"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lxc-template-${{ needs.validate-config.outputs.template-version }}
+          path: |
+            output/*.tar.gz
+            output/*.sha256
+            .build/build-report.txt
+          retention-days: 30
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ github.run_number }}
+          path: |
+            logs/
+          retention-days: 7
+
+  # 集成测试作业
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [build-template]
+    if: ${{ !inputs.skip_tests }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: lxc-template-${{ needs.validate-config.outputs.template-version }}
+          path: output/
+
+      - name: Run integration tests
+        run: |
+          echo "Running integration tests..."
+          
+          # 设置权限
+          chmod +x scripts/*.sh
+          
+          # 运行集成测试
+          if [[ -f tests/test-packaging.bats ]]; then
+            sudo apt-get update
+            sudo apt-get install -y bats
+            bats tests/test-packaging.bats
+          else
+            echo "No integration tests found, performing basic validation..."
+            
+            # 基本的模板文件检查
+            TEMPLATE_FILE=$(find output/ -name "*.tar.gz" -type f | head -n1)
+            if [[ -n "$TEMPLATE_FILE" ]]; then
+              echo "Checking template file: $TEMPLATE_FILE"
+              
+              # 检查文件完整性
+              if tar -tzf "$TEMPLATE_FILE" >/dev/null 2>&1; then
+                echo "✓ Template archive is valid"
+              else
+                echo "✗ Template archive is corrupted"
+                exit 1
+              fi
+              
+              # 检查文件大小
+              FILE_SIZE=$(stat -c%s "$TEMPLATE_FILE")
+              if [[ $FILE_SIZE -gt 10485760 ]]; then  # 10MB
+                echo "✓ Template size is reasonable: $(du -h "$TEMPLATE_FILE" | cut -f1)"
+              else
+                echo "✗ Template size seems too small: $(du -h "$TEMPLATE_FILE" | cut -f1)"
+                exit 1
+              fi
+            else
+              echo "✗ No template file found"
+              exit 1
+            fi
+          fi
+
+  # 安全扫描作业
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: [build-template]
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: lxc-template-${{ needs.validate-config.outputs.template-version }}
+          path: output/
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: 'output/'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # 发布作业
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [validate-config, build-template, integration-tests]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: lxc-template-${{ needs.validate-config.outputs.template-version }}
+          path: output/
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          echo "Generating release notes..."
+          
+          # 获取版本信息
+          VERSION=${GITHUB_REF#refs/tags/}
+          TEMPLATE_NAME="${{ needs.validate-config.outputs.template-name }}"
+          TEMPLATE_VERSION="${{ needs.validate-config.outputs.template-version }}"
+          K3S_VERSION="${{ needs.validate-config.outputs.k3s-version }}"
+          BUILD_TIME="${{ needs.build-template.outputs.build-time }}"
+          TEMPLATE_SIZE="${{ needs.build-template.outputs.template-size }}"
+          
+          # 生成发布说明
+          cat > release-notes.md << EOF
+          # PVE LXC K3s Template ${VERSION}
+          
+          ## Template Information
+          - **Template Name**: ${TEMPLATE_NAME}
+          - **Template Version**: ${TEMPLATE_VERSION}
+          - **K3s Version**: ${K3S_VERSION}
+          - **Base Image**: Alpine Linux 3.18
+          - **Architecture**: amd64
+          
+          ## Build Information
+          - **Build Time**: ${BUILD_TIME} seconds
+          - **Template Size**: ${TEMPLATE_SIZE}
+          - **Build Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          
+          ## Features
+          - Pre-installed K3s Kubernetes cluster
+          - Optimized Alpine Linux base
+          - Security hardening applied
+          - Auto-start K3s service
+          - Multi-node cluster support
+          
+          ## Installation
+          1. Download the template file
+          2. Upload to your Proxmox VE server
+          3. Create LXC container using the template
+          4. Start the container - K3s will auto-start
+          
+          ## Files
+          EOF
+          
+          # 添加文件列表
+          echo "### Template Files" >> release-notes.md
+          for file in output/*; do
+            if [[ -f "$file" ]]; then
+              filename=$(basename "$file")
+              filesize=$(du -h "$file" | cut -f1)
+              echo "- \`$filename\` ($filesize)" >> release-notes.md
+            fi
+          done
+          
+          # 添加校验和
+          if [[ -f output/*.sha256 ]]; then
+            echo "" >> release-notes.md
+            echo "### Checksums" >> release-notes.md
+            echo "\`\`\`" >> release-notes.md
+            cat output/*.sha256 >> release-notes.md
+            echo "\`\`\`" >> release-notes.md
+          fi
+          
+          echo "Release notes generated"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: PVE LXC K3s Template ${{ github.ref_name }}
+          body_path: release-notes.md
+          files: |
+            output/*.tar.gz
+            output/*.sha256
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 通知作业
+  notify:
+    name: Build Notification
+    runs-on: ubuntu-latest
+    needs: [validate-config, build-template, integration-tests]
+    if: always()
+    steps:
+      - name: Determine build status
+        id: status
+        run: |
+          if [[ "${{ needs.validate-config.result }}" == "success" && \
+                "${{ needs.build-template.result }}" == "success" && \
+                ("${{ needs.integration-tests.result }}" == "success" || "${{ needs.integration-tests.result }}" == "skipped") ]]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+            echo "message=Build completed successfully" >> $GITHUB_OUTPUT
+          else
+            echo "status=failure" >> $GITHUB_OUTPUT
+            echo "message=Build failed" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create build summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ${{ steps.status.outputs.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Template**: ${{ needs.validate-config.outputs.template-name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ needs.validate-config.outputs.template-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **K3s Version**: ${{ needs.validate-config.outputs.k3s-version }}" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ needs.build-template.outputs.build-time }}" != "" ]]; then
+            echo "- **Build Time**: ${{ needs.build-template.outputs.build-time }} seconds" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          if [[ "${{ needs.build-template.outputs.template-size }}" != "" ]]; then
+            echo "- **Template Size**: ${{ needs.build-template.outputs.template-size }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Job Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Config Validation: ${{ needs.validate-config.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Template Build: ${{ needs.build-template.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Integration Tests: ${{ needs.integration-tests.result }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const status = '${{ steps.status.outputs.status }}';
+            const message = '${{ steps.status.outputs.message }}';
+            const templateName = '${{ needs.validate-config.outputs.template-name }}';
+            const templateVersion = '${{ needs.validate-config.outputs.template-version }}';
+            const buildTime = '${{ needs.build-template.outputs.build-time }}';
+            const templateSize = '${{ needs.build-template.outputs.template-size }}';
+            
+            const statusIcon = status === 'success' ? '✅' : '❌';
+            
+            let comment = `${statusIcon} **Build ${status.toUpperCase()}**: ${message}\n\n`;
+            comment += `**Template Information:**\n`;
+            comment += `- Name: ${templateName}\n`;
+            comment += `- Version: ${templateVersion}\n`;
+            
+            if (buildTime) {
+              comment += `- Build Time: ${buildTime} seconds\n`;
+            }
+            
+            if (templateSize) {
+              comment += `- Template Size: ${templateSize}\n`;
+            }
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });

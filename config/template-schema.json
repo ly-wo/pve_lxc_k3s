@@ -1,0 +1,271 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PVE LXC K3s Template Configuration",
+  "description": "Configuration schema for PVE LXC K3s template generation",
+  "type": "object",
+  "required": ["template", "k3s", "system"],
+  "properties": {
+    "template": {
+      "type": "object",
+      "required": ["name", "version", "base_image"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$",
+          "description": "Template name (lowercase, alphanumeric and hyphens only)"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Template version in semver format"
+        },
+        "description": {
+          "type": "string",
+          "description": "Template description"
+        },
+        "author": {
+          "type": "string",
+          "description": "Template author"
+        },
+        "base_image": {
+          "type": "string",
+          "pattern": "^alpine:[0-9]+\\.[0-9]+$",
+          "description": "Base Alpine Linux image"
+        },
+        "architecture": {
+          "type": "string",
+          "enum": ["amd64", "arm64", "armv7"],
+          "default": "amd64",
+          "description": "Target architecture"
+        }
+      }
+    },
+    "k3s": {
+      "type": "object",
+      "required": ["version"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+\\+k3s[0-9]+$",
+          "description": "K3s version to install"
+        },
+        "install_options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "K3s installation options"
+        },
+        "cluster_init": {
+          "type": "boolean",
+          "default": true,
+          "description": "Initialize as cluster server"
+        },
+        "server_options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional K3s server options"
+        },
+        "agent_options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Additional K3s agent options"
+        }
+      }
+    },
+    "system": {
+      "type": "object",
+      "properties": {
+        "timezone": {
+          "type": "string",
+          "default": "UTC",
+          "description": "System timezone"
+        },
+        "locale": {
+          "type": "string",
+          "default": "en_US.UTF-8",
+          "description": "System locale"
+        },
+        "packages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Packages to install"
+        },
+        "remove_packages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Packages to remove"
+        },
+        "services": {
+          "type": "object",
+          "properties": {
+            "enable": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Services to enable"
+            },
+            "disable": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Services to disable"
+            }
+          }
+        }
+      }
+    },
+    "security": {
+      "type": "object",
+      "properties": {
+        "disable_root_login": {
+          "type": "boolean",
+          "default": true,
+          "description": "Disable root login"
+        },
+        "create_k3s_user": {
+          "type": "boolean",
+          "default": true,
+          "description": "Create dedicated K3s user"
+        },
+        "k3s_user": {
+          "type": "string",
+          "default": "k3s",
+          "description": "K3s user name"
+        },
+        "k3s_uid": {
+          "type": "integer",
+          "minimum": 1000,
+          "default": 1000,
+          "description": "K3s user ID"
+        },
+        "k3s_gid": {
+          "type": "integer",
+          "minimum": 1000,
+          "default": 1000,
+          "description": "K3s group ID"
+        },
+        "firewall_rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["port", "protocol"],
+            "properties": {
+              "port": {
+                "type": "string",
+                "pattern": "^[0-9]+(-[0-9]+)?$",
+                "description": "Port or port range"
+              },
+              "protocol": {
+                "type": "string",
+                "enum": ["tcp", "udp"],
+                "description": "Protocol"
+              },
+              "description": {
+                "type": "string",
+                "description": "Rule description"
+              }
+            }
+          }
+        },
+        "remove_packages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Security-related packages to remove"
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "properties": {
+        "interfaces": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "Network interfaces configuration"
+        },
+        "dns_servers": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "ipv4"
+          },
+          "description": "DNS servers"
+        },
+        "search_domains": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "DNS search domains"
+        }
+      }
+    },
+    "storage": {
+      "type": "object",
+      "properties": {
+        "volumes": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "Storage volumes configuration"
+        },
+        "mounts": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "Mount points configuration"
+        },
+        "cleanup_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Paths to cleanup during build"
+        }
+      }
+    },
+    "build": {
+      "type": "object",
+      "properties": {
+        "cleanup_after_install": {
+          "type": "boolean",
+          "default": true,
+          "description": "Cleanup after installation"
+        },
+        "optimize_size": {
+          "type": "boolean",
+          "default": true,
+          "description": "Optimize template size"
+        },
+        "include_docs": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include documentation"
+        },
+        "parallel_jobs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8,
+          "default": 2,
+          "description": "Number of parallel build jobs"
+        }
+      }
+    }
+  }
+}

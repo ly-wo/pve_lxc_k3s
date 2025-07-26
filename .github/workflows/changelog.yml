@@ -1,0 +1,303 @@
+name: Generate Changelog
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version for changelog (e.g., v1.0.0)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  generate-changelog:
+    name: Generate Changelog
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.version }}" ]]; then
+            VERSION="${{ inputs.version }}"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            # 获取下一个版本号
+            LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+            if [[ "$LATEST_TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+              MAJOR=${BASH_REMATCH[1]}
+              MINOR=${BASH_REMATCH[2]}
+              PATCH=${BASH_REMATCH[3]}
+              VERSION="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+            else
+              VERSION="v1.0.0"
+            fi
+          fi
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Generating changelog for version: $VERSION"
+
+      - name: Generate changelog content
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          
+          echo "Generating changelog for $VERSION..."
+          
+          # 获取上一个版本标签
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          
+          # 创建临时文件
+          TEMP_CHANGELOG=$(mktemp)
+          
+          # 生成变更日志头部
+          cat > "$TEMP_CHANGELOG" << EOF
+          # Changelog
+          
+          All notable changes to this project will be documented in this file.
+          
+          The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+          and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+          
+          ## [${VERSION#v}] - $(date +%Y-%m-%d)
+          
+          EOF
+          
+          # 分析提交历史生成变更分类
+          if [[ -n "$PREVIOUS_TAG" ]]; then
+            echo "### Added" >> "$TEMP_CHANGELOG"
+            git log --pretty=format:"- %s" ${PREVIOUS_TAG}..HEAD --grep="^feat" --grep="^add" >> "$TEMP_CHANGELOG" || true
+            echo "" >> "$TEMP_CHANGELOG"
+            
+            echo "### Changed" >> "$TEMP_CHANGELOG"
+            git log --pretty=format:"- %s" ${PREVIOUS_TAG}..HEAD --grep="^change" --grep="^update" --grep="^modify" >> "$TEMP_CHANGELOG" || true
+            echo "" >> "$TEMP_CHANGELOG"
+            
+            echo "### Fixed" >> "$TEMP_CHANGELOG"
+            git log --pretty=format:"- %s" ${PREVIOUS_TAG}..HEAD --grep="^fix" --grep="^bug" >> "$TEMP_CHANGELOG" || true
+            echo "" >> "$TEMP_CHANGELOG"
+            
+            echo "### Security" >> "$TEMP_CHANGELOG"
+            git log --pretty=format:"- %s" ${PREVIOUS_TAG}..HEAD --grep="^security" --grep="^sec" >> "$TEMP_CHANGELOG" || true
+            echo "" >> "$TEMP_CHANGELOG"
+            
+            echo "### Deprecated" >> "$TEMP_CHANGELOG"
+            git log --pretty=format:"- %s" ${PREVIOUS_TAG}..HEAD --grep="^deprecate" >> "$TEMP_CHANGELOG" || true
+            echo "" >> "$TEMP_CHANGELOG"
+            
+            echo "### Removed" >> "$TEMP_CHANGELOG"
+            git log --pretty=format:"- %s" ${PREVIOUS_TAG}..HEAD --grep="^remove" --grep="^delete" >> "$TEMP_CHANGELOG" || true
+            echo "" >> "$TEMP_CHANGELOG"
+            
+            # 添加所有其他提交
+            echo "### Other Changes" >> "$TEMP_CHANGELOG"
+            git log --pretty=format:"- %s (%h)" ${PREVIOUS_TAG}..HEAD \
+              --invert-grep \
+              --grep="^feat" --grep="^add" --grep="^change" --grep="^update" \
+              --grep="^modify" --grep="^fix" --grep="^bug" --grep="^security" \
+              --grep="^sec" --grep="^deprecate" --grep="^remove" --grep="^delete" \
+              >> "$TEMP_CHANGELOG" || true
+            echo "" >> "$TEMP_CHANGELOG"
+          else
+            echo "### Initial Release" >> "$TEMP_CHANGELOG"
+            echo "- First release of PVE LXC K3s Template" >> "$TEMP_CHANGELOG"
+            echo "- Alpine Linux based LXC template with pre-installed K3s" >> "$TEMP_CHANGELOG"
+            echo "- Automated build and deployment pipeline" >> "$TEMP_CHANGELOG"
+            echo "- Security hardening and optimization" >> "$TEMP_CHANGELOG"
+            echo "" >> "$TEMP_CHANGELOG"
+          fi
+          
+          # 添加技术细节
+          cat >> "$TEMP_CHANGELOG" << EOF
+          ### Technical Details
+          
+          #### Template Information
+          - **Base OS**: Alpine Linux 3.18
+          - **Architecture**: amd64
+          - **K3s Version**: Latest stable at build time
+          - **Container Runtime**: containerd
+          - **Network Plugin**: Flannel
+          
+          #### Build Information
+          - **Build Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          - **Git Commit**: $(git rev-parse HEAD)
+          - **Git Branch**: $(git rev-parse --abbrev-ref HEAD)
+          
+          #### Security Features
+          - Minimal Alpine Linux base for reduced attack surface
+          - Non-root user execution for K3s services
+          - Firewall rules configured for K3s ports
+          - Security hardening applied to system configuration
+          - Regular security updates through automated builds
+          
+          #### Performance Optimizations
+          - Optimized package selection for minimal size
+          - Fast container startup time
+          - Memory-efficient configuration
+          - Cached build dependencies for faster CI/CD
+          
+          EOF
+          
+          # 如果存在现有的 CHANGELOG.md，合并内容
+          if [[ -f CHANGELOG.md ]]; then
+            echo "Merging with existing changelog..."
+            
+            # 提取现有变更日志的内容（跳过头部）
+            if grep -q "^## \[" CHANGELOG.md; then
+              sed -n '/^## \[/,$p' CHANGELOG.md >> "$TEMP_CHANGELOG"
+            fi
+          fi
+          
+          # 移动临时文件到最终位置
+          mv "$TEMP_CHANGELOG" CHANGELOG.md
+          
+          echo "Changelog generated successfully"
+          
+          # 输出变更日志内容用于后续步骤
+          echo "changelog-content<<EOF" >> $GITHUB_OUTPUT
+          head -n 50 CHANGELOG.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Validate changelog format
+        run: |
+          echo "Validating changelog format..."
+          
+          # 检查必要的部分是否存在
+          if ! grep -q "^# Changelog" CHANGELOG.md; then
+            echo "ERROR: Changelog header missing"
+            exit 1
+          fi
+          
+          if ! grep -q "^## \[" CHANGELOG.md; then
+            echo "ERROR: No version entries found"
+            exit 1
+          fi
+          
+          # 检查日期格式
+          if ! grep -q "^## \[.*\] - [0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}" CHANGELOG.md; then
+            echo "ERROR: Invalid date format in version entry"
+            exit 1
+          fi
+          
+          echo "Changelog format validation passed"
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet CHANGELOG.md; then
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+            echo "No changes to commit"
+          else
+            echo "has-changes=true" >> $GITHUB_OUTPUT
+            echo "Changes detected in CHANGELOG.md"
+          fi
+
+      - name: Commit changelog
+        if: steps.changes.outputs.has-changes == 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          git add CHANGELOG.md
+          git commit -m "docs: update changelog for $VERSION
+          
+          - Generated changelog for version $VERSION
+          - Updated with latest changes and technical details
+          - Automated by GitHub Actions"
+          
+          # 如果是在主分支上，直接推送
+          if [[ "${{ github.ref_name }}" == "main" ]]; then
+            git push
+            echo "Changelog committed and pushed to main branch"
+          else
+            echo "Changelog committed locally (not on main branch)"
+          fi
+
+      - name: Create pull request for changelog
+        if: steps.changes.outputs.has-changes == 'true' && github.ref_name != 'main'
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "docs: update changelog for ${{ steps.version.outputs.version }}"
+          title: "Update Changelog for ${{ steps.version.outputs.version }}"
+          body: |
+            ## Changelog Update
+            
+            This PR updates the changelog for version `${{ steps.version.outputs.version }}`.
+            
+            ### Changes Include:
+            - Added new version entry with date
+            - Categorized changes by type (Added, Changed, Fixed, etc.)
+            - Included technical details and build information
+            - Merged with existing changelog content
+            
+            ### Preview:
+            ```markdown
+            ${{ steps.changelog.outputs.changelog-content }}
+            ```
+            
+            This changelog was automatically generated based on commit history and follows the [Keep a Changelog](https://keepachangelog.com/) format.
+          branch: changelog-${{ steps.version.outputs.version }}
+          delete-branch: true
+
+      - name: Create release draft
+        if: steps.changes.outputs.has-changes == 'true' && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: PVE LXC K3s Template ${{ steps.version.outputs.version }}
+          body: |
+            ## Release Notes
+            
+            This release includes the following changes:
+            
+            ${{ steps.changelog.outputs.changelog-content }}
+            
+            ### Download
+            
+            The template files will be available as release assets once the build completes.
+            
+            ### Installation
+            
+            1. Download the template file from the assets below
+            2. Upload to your Proxmox VE server
+            3. Create LXC container using the template
+            4. Start the container - K3s will auto-start
+            
+            For detailed installation instructions, see the [README](README.md).
+          draft: true
+          prerelease: ${{ contains(steps.version.outputs.version, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          echo "## Changelog Generation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Changes Detected**: ${{ steps.changes.outputs.has-changes }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ steps.changes.outputs.has-changes }}" == "true" ]]; then
+            echo "### Generated Changelog Preview" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`markdown" >> $GITHUB_STEP_SUMMARY
+            head -n 30 CHANGELOG.md >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No changes were made to the changelog." >> $GITHUB_STEP_SUMMARY
+          fi

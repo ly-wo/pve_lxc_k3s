@@ -1,0 +1,140 @@
+name: Feature Request
+description: Suggest a new feature or enhancement for the PVE LXC K3s Template
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a new feature! Please provide as much detail as possible to help us understand your request.
+
+  - type: textarea
+    id: feature-description
+    attributes:
+      label: Feature Description
+      description: A clear and concise description of the feature you'd like to see.
+      placeholder: "Describe the feature you'd like..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem-statement
+    attributes:
+      label: Problem Statement
+      description: What problem does this feature solve? What use case does it address?
+      placeholder: "This feature would solve the problem of..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed Solution
+      description: How do you think this feature should work?
+      placeholder: "I think this could be implemented by..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternative Solutions
+      description: Have you considered any alternative solutions or workarounds?
+      placeholder: "Alternative approaches could be..."
+    validations:
+      required: false
+
+  - type: dropdown
+    id: feature-category
+    attributes:
+      label: Feature Category
+      description: What category does this feature fall into?
+      options:
+        - K3s Configuration
+        - Security Enhancement
+        - Performance Optimization
+        - Networking
+        - Storage
+        - Monitoring/Logging
+        - Build Process
+        - Documentation
+        - Testing
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How important is this feature to you?
+      options:
+        - Low - Nice to have
+        - Medium - Would be helpful
+        - High - Important for my use case
+        - Critical - Blocking my adoption
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: implementation
+    attributes:
+      label: Implementation Considerations
+      description: What aspects should be considered for implementation?
+      options:
+        - label: Backward compatibility
+        - label: Security implications
+        - label: Performance impact
+        - label: Configuration complexity
+        - label: Documentation updates
+        - label: Testing requirements
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use Case Details
+      description: Provide specific details about how you would use this feature.
+      placeholder: |
+        In my environment, I would use this feature to...
+        
+        Example scenario:
+        1. I have a setup where...
+        2. I need to...
+        3. This feature would allow me to...
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: What would need to be true for this feature to be considered complete?
+      placeholder: |
+        - [ ] Feature works as described
+        - [ ] Documentation is updated
+        - [ ] Tests are added
+        - [ ] No breaking changes
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      description: Are you willing to contribute to this feature?
+      options:
+        - label: I'm willing to submit a pull request for this feature
+        - label: I can help with testing
+        - label: I can help with documentation
+        - label: I can provide feedback during development
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Add any other context, screenshots, or examples about the feature request.
+      placeholder: "Any additional information that might help..."
+    validations:
+      required: false

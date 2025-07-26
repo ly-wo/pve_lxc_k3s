@@ -1,0 +1,84 @@
+# PVE LXC K3s 模板配置文件
+# 此文件定义了构建 LXC 模板的所有配置参数
+
+template:
+  name: "alpine-k3s"
+  version: "1.0.0"
+  description: "Alpine Linux LXC template with pre-installed K3s"
+  author: "PVE LXC K3s Template Generator"
+  base_image: "alpine:3.18"
+  architecture: "amd64"
+
+k3s:
+  version: "v1.28.4+k3s1"
+  install_options:
+    - "--disable=traefik"
+    - "--disable=servicelb"
+    - "--write-kubeconfig-mode=644"
+  cluster_init: true
+  server_options: []
+  agent_options: []
+  
+system:
+  timezone: "UTC"
+  locale: "en_US.UTF-8"
+  packages:
+    - curl
+    - wget
+    - ca-certificates
+    - openssl
+    - bash
+    - coreutils
+  remove_packages:
+    - apk-tools-doc
+    - man-pages
+    - docs
+  services:
+    enable:
+      - k3s
+    disable:
+      - chronyd
+      
+security:
+  disable_root_login: true
+  create_k3s_user: true
+  k3s_user: "k3s"
+  k3s_uid: 1000
+  k3s_gid: 1000
+  firewall_rules:
+    - port: "6443"
+      protocol: "tcp"
+      description: "K3s API Server"
+    - port: "10250"
+      protocol: "tcp" 
+      description: "Kubelet API"
+    - port: "8472"
+      protocol: "udp"
+      description: "Flannel VXLAN"
+  remove_packages:
+    - apk-tools
+    - alpine-keys
+
+network:
+  interfaces: []
+  dns_servers:
+    - "8.8.8.8"
+    - "8.8.4.4"
+  search_domains: []
+  cluster_cidr: "10.42.0.0/16"
+  service_cidr: "10.43.0.0/16"
+  cluster_dns: "10.43.0.10"
+
+storage:
+  volumes: []
+  mounts: []
+  cleanup_paths:
+    - "/tmp/*"
+    - "/var/cache/apk/*"
+    - "/var/log/*"
+
+build:
+  cleanup_after_install: true
+  optimize_size: true
+  include_docs: false
+  parallel_jobs: 2

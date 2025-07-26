@@ -1,0 +1,353 @@
+name: Update Dependencies
+
+on:
+  schedule:
+    # Run weekly on Sundays at 02:00 UTC
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+    inputs:
+      force_update:
+        description: 'Force update all dependencies'
+        required: false
+        default: false
+        type: boolean
+      update_k3s:
+        description: 'Update K3s version'
+        required: false
+        default: true
+        type: boolean
+      update_alpine:
+        description: 'Update Alpine base image'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-updates:
+    name: Check for Updates
+    runs-on: ubuntu-latest
+    outputs:
+      k3s-update: ${{ steps.k3s.outputs.update-available }}
+      k3s-current: ${{ steps.k3s.outputs.current-version }}
+      k3s-latest: ${{ steps.k3s.outputs.latest-version }}
+      alpine-update: ${{ steps.alpine.outputs.update-available }}
+      alpine-current: ${{ steps.alpine.outputs.current-version }}
+      alpine-latest: ${{ steps.alpine.outputs.latest-version }}
+      has-updates: ${{ steps.summary.outputs.has-updates }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check K3s version updates
+        id: k3s
+        if: inputs.update_k3s != false
+        run: |
+          echo "Checking for K3s version updates..."
+          
+          # 从配置文件获取当前版本
+          source scripts/config-loader.sh
+          CURRENT_VERSION=$(get_config "k3s.version")
+          
+          # 获取最新的 K3s 版本
+          LATEST_VERSION=$(curl -s https://api.github.com/repos/k3s-io/k3s/releases/latest | jq -r '.tag_name')
+          
+          echo "current-version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "latest-version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+          
+          if [[ "$CURRENT_VERSION" != "$LATEST_VERSION" ]] || [[ "${{ inputs.force_update }}" == "true" ]]; then
+            echo "update-available=true" >> $GITHUB_OUTPUT
+            echo "K3s update available: $CURRENT_VERSION -> $LATEST_VERSION"
+          else
+            echo "update-available=false" >> $GITHUB_OUTPUT
+            echo "K3s is up to date: $CURRENT_VERSION"
+          fi
+
+      - name: Check Alpine version updates
+        id: alpine
+        if: inputs.update_alpine != false
+        run: |
+          echo "Checking for Alpine Linux version updates..."
+          
+          # 从配置文件获取当前版本
+          source scripts/config-loader.sh
+          CURRENT_IMAGE=$(get_config "template.base_image")
+          CURRENT_VERSION=${CURRENT_IMAGE#*:}
+          
+          # 获取最新的 Alpine 版本（仅检查同一主版本）
+          MAJOR_VERSION=${CURRENT_VERSION%%.*}
+          LATEST_VERSION=$(curl -s "https://registry.hub.docker.com/v2/repositories/library/alpine/tags/?page_size=100" | \
+            jq -r ".results[].name" | \
+            grep "^${MAJOR_VERSION}\." | \
+            sort -V | \
+            tail -n1)
+          
+          echo "current-version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "latest-version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+          
+          if [[ "$CURRENT_VERSION" != "$LATEST_VERSION" ]] || [[ "${{ inputs.force_update }}" == "true" ]]; then
+            echo "update-available=true" >> $GITHUB_OUTPUT
+            echo "Alpine update available: $CURRENT_VERSION -> $LATEST_VERSION"
+          else
+            echo "update-available=false" >> $GITHUB_OUTPUT
+            echo "Alpine is up to date: $CURRENT_VERSION"
+          fi
+
+      - name: Check for security updates
+        id: security
+        run: |
+          echo "Checking for security updates..."
+          
+          # 检查 Alpine 安全公告
+          SECURITY_ADVISORIES=$(curl -s "https://secdb.alpinelinux.org/v3.18/main.json" | jq -r '.packages | keys[]' | wc -l)
+          
+          echo "Found $SECURITY_ADVISORIES packages with security updates"
+          
+          if [[ $SECURITY_ADVISORIES -gt 0 ]]; then
+            echo "security-updates=true" >> $GITHUB_OUTPUT
+          else
+            echo "security-updates=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Summarize updates
+        id: summary
+        run: |
+          K3S_UPDATE="${{ steps.k3s.outputs.update-available }}"
+          ALPINE_UPDATE="${{ steps.alpine.outputs.update-available }}"
+          SECURITY_UPDATES="${{ steps.security.outputs.security-updates }}"
+          
+          if [[ "$K3S_UPDATE" == "true" ]] || [[ "$ALPINE_UPDATE" == "true" ]] || [[ "$SECURITY_UPDATES" == "true" ]]; then
+            echo "has-updates=true" >> $GITHUB_OUTPUT
+            echo "Updates are available"
+          else
+            echo "has-updates=false" >> $GITHUB_OUTPUT
+            echo "No updates available"
+          fi
+
+  update-dependencies:
+    name: Update Dependencies
+    runs-on: ubuntu-latest
+    needs: [check-updates]
+    if: needs.check-updates.outputs.has-updates == 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update K3s version
+        if: needs.check-updates.outputs.k3s-update == 'true'
+        run: |
+          LATEST_VERSION="${{ needs.check-updates.outputs.k3s-latest }}"
+          
+          echo "Updating K3s version to $LATEST_VERSION"
+          
+          # 更新配置文件
+          sed -i "s/version: \".*\"/version: \"$LATEST_VERSION\"/" config/template.yaml
+          
+          echo "K3s version updated in config/template.yaml"
+
+      - name: Update Alpine version
+        if: needs.check-updates.outputs.alpine-update == 'true'
+        run: |
+          LATEST_VERSION="${{ needs.check-updates.outputs.alpine-latest }}"
+          
+          echo "Updating Alpine version to $LATEST_VERSION"
+          
+          # 更新配置文件
+          sed -i "s/base_image: \"alpine:.*\"/base_image: \"alpine:$LATEST_VERSION\"/" config/template.yaml
+          
+          echo "Alpine version updated in config/template.yaml"
+
+      - name: Update documentation
+        run: |
+          echo "Updating documentation with new versions..."
+          
+          K3S_VERSION="${{ needs.check-updates.outputs.k3s-latest }}"
+          ALPINE_VERSION="${{ needs.check-updates.outputs.alpine-latest }}"
+          
+          # 更新 README.md
+          if [[ -f README.md ]]; then
+            if [[ "${{ needs.check-updates.outputs.k3s-update }}" == "true" ]]; then
+              sed -i "s/K3s Version: [^)]*/K3s Version: $K3S_VERSION/" README.md
+            fi
+            
+            if [[ "${{ needs.check-updates.outputs.alpine-update }}" == "true" ]]; then
+              sed -i "s/Alpine Linux [0-9.]*/Alpine Linux $ALPINE_VERSION/" README.md
+            fi
+          fi
+          
+          # 更新文档目录
+          if [[ -d docs/ ]]; then
+            find docs/ -name "*.md" -exec sed -i "s/K3s [v]*[0-9.+k3s]*/K3s $K3S_VERSION/g" {} \;
+            find docs/ -name "*.md" -exec sed -i "s/Alpine [0-9.]*/Alpine $ALPINE_VERSION/g" {} \;
+          fi
+
+      - name: Test configuration
+        run: |
+          echo "Testing updated configuration..."
+          
+          # 验证配置文件格式
+          if ! scripts/config-validator.sh config/template.yaml; then
+            echo "ERROR: Configuration validation failed after updates"
+            exit 1
+          fi
+          
+          echo "Configuration validation passed"
+
+      - name: Generate update summary
+        id: summary
+        run: |
+          echo "Generating update summary..."
+          
+          SUMMARY_FILE=$(mktemp)
+          
+          cat > "$SUMMARY_FILE" << EOF
+          ## Dependency Updates
+          
+          This automated update includes the following changes:
+          
+          EOF
+          
+          if [[ "${{ needs.check-updates.outputs.k3s-update }}" == "true" ]]; then
+            cat >> "$SUMMARY_FILE" << EOF
+          ### K3s Update
+          - **Previous Version**: ${{ needs.check-updates.outputs.k3s-current }}
+          - **New Version**: ${{ needs.check-updates.outputs.k3s-latest }}
+          - **Release Notes**: [View on GitHub](https://github.com/k3s-io/k3s/releases/tag/${{ needs.check-updates.outputs.k3s-latest }})
+          
+          EOF
+          fi
+          
+          if [[ "${{ needs.check-updates.outputs.alpine-update }}" == "true" ]]; then
+            cat >> "$SUMMARY_FILE" << EOF
+          ### Alpine Linux Update
+          - **Previous Version**: ${{ needs.check-updates.outputs.alpine-current }}
+          - **New Version**: ${{ needs.check-updates.outputs.alpine-latest }}
+          - **Release Notes**: [View Alpine Release Notes](https://alpinelinux.org/releases/)
+          
+          EOF
+          fi
+          
+          cat >> "$SUMMARY_FILE" << EOF
+          ### Automated Changes
+          - Updated version references in configuration files
+          - Updated documentation with new version numbers
+          - Validated configuration file format
+          
+          ### Testing Required
+          - [ ] Build template with new versions
+          - [ ] Test K3s functionality
+          - [ ] Verify container startup
+          - [ ] Check for any breaking changes
+          
+          ### Security Considerations
+          - This update may include security fixes
+          - Review release notes for security-related changes
+          - Consider expedited testing and release if security fixes are included
+          
+          ---
+          
+          This update was automatically generated by the dependency update workflow.
+          Please review the changes and test thoroughly before merging.
+          EOF
+          
+          echo "summary-file=$SUMMARY_FILE" >> $GITHUB_OUTPUT
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: |
+            chore: update dependencies
+            
+            - Update K3s to ${{ needs.check-updates.outputs.k3s-latest }}
+            - Update Alpine to ${{ needs.check-updates.outputs.alpine-latest }}
+            - Update documentation references
+            - Automated dependency update
+          title: "chore: Update Dependencies"
+          body-path: ${{ steps.summary.outputs.summary-file }}
+          branch: update-dependencies-${{ github.run_number }}
+          delete-branch: true
+          labels: |
+            dependencies
+            automated
+            ${{ needs.check-updates.outputs.k3s-update == 'true' && 'k3s' || '' }}
+            ${{ needs.check-updates.outputs.alpine-update == 'true' && 'alpine' || '' }}
+
+  notify-security-updates:
+    name: Notify Security Updates
+    runs-on: ubuntu-latest
+    needs: [check-updates, update-dependencies]
+    if: needs.check-updates.outputs.has-updates == 'true'
+    steps:
+      - name: Create security notification issue
+        if: contains(needs.check-updates.outputs, 'security')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '🔒 Security Updates Available';
+            const body = `## Security Update Notification
+            
+            Automated dependency scanning has detected available security updates.
+            
+            ### Updates Available
+            - **K3s**: ${{ needs.check-updates.outputs.k3s-current }} → ${{ needs.check-updates.outputs.k3s-latest }}
+            - **Alpine**: ${{ needs.check-updates.outputs.alpine-current }} → ${{ needs.check-updates.outputs.alpine-latest }}
+            
+            ### Action Required
+            1. Review the automatically created pull request
+            2. Test the updated template thoroughly
+            3. Expedite the release process if critical security fixes are included
+            4. Monitor for any issues after deployment
+            
+            ### Security Resources
+            - [K3s Security Releases](https://github.com/k3s-io/k3s/security)
+            - [Alpine Security Advisories](https://secdb.alpinelinux.org/)
+            
+            This issue was automatically created by the dependency update workflow.
+            
+            /cc @${context.actor}`;
+            
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['security', 'dependencies', 'high-priority']
+            });
+
+  summary:
+    name: Update Summary
+    runs-on: ubuntu-latest
+    needs: [check-updates, update-dependencies]
+    if: always()
+    steps:
+      - name: Create summary
+        run: |
+          echo "## Dependency Update Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Updates Available**: ${{ needs.check-updates.outputs.has-updates }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **K3s Update**: ${{ needs.check-updates.outputs.k3s-update }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Alpine Update**: ${{ needs.check-updates.outputs.alpine-update }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ needs.check-updates.outputs.has-updates }}" == "true" ]]; then
+            echo "### Version Changes" >> $GITHUB_STEP_SUMMARY
+            
+            if [[ "${{ needs.check-updates.outputs.k3s-update }}" == "true" ]]; then
+              echo "- **K3s**: ${{ needs.check-updates.outputs.k3s-current }} → ${{ needs.check-updates.outputs.k3s-latest }}" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            if [[ "${{ needs.check-updates.outputs.alpine-update }}" == "true" ]]; then
+              echo "- **Alpine**: ${{ needs.check-updates.outputs.alpine-current }} → ${{ needs.check-updates.outputs.alpine-latest }}" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "A pull request has been created with the updates." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No updates were available at this time." >> $GITHUB_STEP_SUMMARY
+          fi
