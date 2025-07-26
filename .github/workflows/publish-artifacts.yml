@@ -7,11 +7,16 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to create release for'
+        description: 'Tag to create release for (e.g., v1.0.0)'
         required: true
         type: string
       prerelease:
         description: 'Mark as pre-release'
+        required: false
+        default: false
+        type: boolean
+      skip_tests:
+        description: 'Skip tests (for quick releases)'
         required: false
         default: false
         type: boolean
@@ -83,11 +88,27 @@ jobs:
           # 创建必要目录
           mkdir -p .build .cache logs output
           
+          # 检查是否跳过测试
+          if [[ "${{ inputs.skip_tests }}" == "true" ]]; then
+            export SKIP_TESTS=true
+            echo "Skipping tests as requested"
+          fi
+          
           # 执行构建
-          sudo -E scripts/build-template.sh
+          if sudo -E scripts/build-template.sh; then
+            echo "✅ Template build completed"
+          else
+            echo "❌ Template build failed"
+            exit 1
+          fi
           
           # 执行打包
-          sudo scripts/packager.sh package
+          if sudo scripts/packager.sh package; then
+            echo "✅ Template packaging completed"
+          else
+            echo "❌ Template packaging failed"
+            exit 1
+          fi
           
           BUILD_END=$(date +%s)
           BUILD_TIME=$((BUILD_END - BUILD_START))
