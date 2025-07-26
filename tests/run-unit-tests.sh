@@ -127,18 +127,27 @@ run_test_file() {
     fi
     
     # Run the test
-    if bats "${bats_args[@]}" --tap "$test_file" > "$output_file" 2>&1; then
-        log_success "✓ $test_name passed"
-    else
-        exit_code=$?
-        log_error "✗ $test_name failed (exit code: $exit_code)"
-        
-        # Show test output on failure
-        if [ "$VERBOSE" = "true" ]; then
-            echo "--- Test output for $test_name ---"
-            cat "$output_file"
-            echo "--- End test output ---"
+    if [[ ${#bats_args[@]} -gt 0 ]]; then
+        if bats "${bats_args[@]}" --tap "$test_file" > "$output_file" 2>&1; then
+            log_success "✓ $test_name passed"
+        else
+            exit_code=$?
+            log_error "✗ $test_name failed (exit code: $exit_code)"
         fi
+    else
+        if bats --tap "$test_file" > "$output_file" 2>&1; then
+            log_success "✓ $test_name passed"
+        else
+            exit_code=$?
+            log_error "✗ $test_name failed (exit code: $exit_code)"
+        fi
+    fi
+        
+    # Show test output on failure
+    if [ "$VERBOSE" = "true" ]; then
+        echo "--- Test output for $test_name ---"
+        cat "$output_file"
+        echo "--- End test output ---"
     fi
     
     local end_time=$(date +%s)

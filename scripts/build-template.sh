@@ -35,7 +35,7 @@ show_progress() {
     CURRENT_STEP=$((CURRENT_STEP + 1))
     local percentage=$((CURRENT_STEP * 100 / TOTAL_STEPS))
     local context="{\"step\": $CURRENT_STEP, \"total_steps\": $TOTAL_STEPS, \"percentage\": $percentage}"
-    log_info "$COMPONENT" "[$CURRENT_STEP/$TOTAL_STEPS] ($percentage%) $step_name" "$context" "" "" "$BUILD_LOG"
+    log_info "$COMPONENT" "$COMPONENT" "[$CURRENT_STEP/$TOTAL_STEPS] ($percentage%) $step_name" "$context" "" "" "$BUILD_LOG"
 }
 
 # 性能监控
@@ -58,15 +58,15 @@ end_timer() {
 error_exit() {
     local error_message="$1"
     local exit_code="${2:-1}"
-    log_error "$error_message"
-    log_error "构建失败，退出码: $exit_code"
+    log_error "$COMPONENT" "$COMPONENT" "$error_message"
+    log_error "$COMPONENT" "$COMPONENT" "构建失败，退出码: $exit_code"
     cleanup_on_error
     exit "$exit_code"
 }
 
 # 错误时清理
 cleanup_on_error() {
-    log_info "执行错误清理..."
+    log_info "$COMPONENT" "$COMPONENT" "执行错误清理..."
     
     # 卸载可能的挂载点
     if mountpoint -q "${BUILD_DIR}/rootfs" 2>/dev/null; then
@@ -76,7 +76,7 @@ cleanup_on_error() {
     # 清理临时文件
     rm -rf "${BUILD_DIR}/temp" || true
     
-    log_info "错误清理完成"
+    log_info "$COMPONENT" "$COMPONENT" "错误清理完成"
 }
 
 # 信号处理
@@ -111,12 +111,12 @@ load_configuration() {
         error_exit "K3s 版本未在配置中指定"
     fi
     
-    log_info "配置加载完成:"
-    log_info "  模板名称: $TEMPLATE_NAME"
-    log_info "  模板版本: $TEMPLATE_VERSION"
-    log_info "  基础镜像: $BASE_IMAGE"
-    log_info "  系统架构: $ARCHITECTURE"
-    log_info "  K3s 版本: $K3S_VERSION"
+    log_info "$COMPONENT" "$COMPONENT" "配置加载完成:"
+    log_info "$COMPONENT" "$COMPONENT" "  模板名称: $TEMPLATE_NAME"
+    log_info "$COMPONENT" "$COMPONENT" "  模板版本: $TEMPLATE_VERSION"
+    log_info "$COMPONENT" "$COMPONENT" "  基础镜像: $BASE_IMAGE"
+    log_info "$COMPONENT" "$COMPONENT" "  系统架构: $ARCHITECTURE"
+    log_info "$COMPONENT" "$COMPONENT" "  K3s 版本: $K3S_VERSION"
 }
 
 # 检查构建环境
@@ -155,7 +155,7 @@ check_build_environment() {
         fi
     done
     
-    log_info "构建环境检查通过"
+    log_info "$COMPONENT" "构建环境检查通过"
 }
 
 # 准备构建目录
@@ -164,7 +164,7 @@ prepare_build_directory() {
     
     # 清理旧的构建目录
     if [[ -d "$BUILD_DIR" ]]; then
-        log_info "清理旧的构建目录"
+        log_info "$COMPONENT" "清理旧的构建目录"
         rm -rf "$BUILD_DIR"
     fi
     
@@ -174,20 +174,20 @@ prepare_build_directory() {
     # 设置权限
     chmod 755 "$BUILD_DIR"
     
-    log_info "构建目录准备完成: $BUILD_DIR"
+    log_info "$COMPONENT" "构建目录准备完成: $BUILD_DIR"
 }
 
 # 下载基础镜像
 download_base_image() {
     show_progress "下载基础镜像"
     
-    log_info "开始下载基础镜像: $BASE_IMAGE"
+    log_info "$COMPONENT" "开始下载基础镜像: $BASE_IMAGE"
     
     if ! "${SCRIPT_DIR}/base-image-manager.sh" download; then
         error_exit "基础镜像下载失败"
     fi
     
-    log_info "基础镜像下载完成"
+    log_info "$COMPONENT" "基础镜像下载完成"
 }
 
 # 提取基础镜像
@@ -202,7 +202,7 @@ extract_base_image() {
         error_exit "基础镜像文件不存在: $cache_path"
     fi
     
-    log_info "提取基础镜像到: ${BUILD_DIR}/rootfs"
+    log_info "$COMPONENT" "提取基础镜像到: ${BUILD_DIR}/rootfs"
     
     # 提取镜像
     if ! tar -xzf "$cache_path" -C "${BUILD_DIR}/rootfs"; then
@@ -214,14 +214,14 @@ extract_base_image() {
         error_exit "基础镜像提取不完整"
     fi
     
-    log_info "基础镜像提取完成"
+    log_info "$COMPONENT" "基础镜像提取完成"
 }
 
 # 系统优化
 optimize_system() {
     show_progress "系统优化"
     
-    log_info "开始系统优化"
+    log_info "$COMPONENT" "开始系统优化"
     
     if ! "${SCRIPT_DIR}/system-optimizer.sh" optimize; then
         error_exit "系统优化失败"
@@ -232,14 +232,14 @@ optimize_system() {
         error_exit "系统包管理和优化失败"
     fi
     
-    log_info "系统优化完成"
+    log_info "$COMPONENT" "系统优化完成"
 }
 
 # 安装 K3s
 install_k3s() {
     show_progress "安装 K3s"
     
-    log_info "开始安装 K3s"
+    log_info "$COMPONENT" "开始安装 K3s"
     
     # 在 chroot 环境中安装 K3s
     cat > "${BUILD_DIR}/rootfs/tmp/install_k3s.sh" << 'EOF'
@@ -279,14 +279,14 @@ EOF
     rm -rf "${BUILD_DIR}/rootfs/scripts"
     rm -f "${BUILD_DIR}/rootfs/tmp/template.yaml"
     
-    log_info "K3s 安装完成"
+    log_info "$COMPONENT" "K3s 安装完成"
 }
 
 # 配置 K3s 服务
 configure_k3s_service() {
     show_progress "配置 K3s 服务"
     
-    log_info "配置 K3s 服务"
+    log_info "$COMPONENT" "配置 K3s 服务"
     
     # 在 chroot 环境中配置服务
     cat > "${BUILD_DIR}/rootfs/tmp/configure_k3s.sh" << 'EOF'
@@ -318,14 +318,14 @@ EOF
     rm -f "${BUILD_DIR}/rootfs/tmp/configure_k3s.sh"
     rm -rf "${BUILD_DIR}/rootfs/scripts"
     
-    log_info "K3s 服务配置完成"
+    log_info "$COMPONENT" "K3s 服务配置完成"
 }
 
 # 安全加固
 apply_security_hardening() {
     show_progress "安全加固"
     
-    log_info "开始安全加固"
+    log_info "$COMPONENT" "开始安全加固"
     
     # 在 chroot 环境中执行安全加固
     cat > "${BUILD_DIR}/rootfs/tmp/security_hardening.sh" << 'EOF'
@@ -361,14 +361,14 @@ EOF
     rm -rf "${BUILD_DIR}/rootfs/scripts"
     rm -rf "${BUILD_DIR}/rootfs/config"
     
-    log_info "安全加固完成"
+    log_info "$COMPONENT" "安全加固完成"
 }
 
 # 最终清理和优化
 final_cleanup() {
     show_progress "最终清理和优化"
     
-    log_info "执行最终清理"
+    log_info "$COMPONENT" "执行最终清理"
     
     # 清理临时文件
     rm -rf "${BUILD_DIR}/rootfs/tmp"/*
@@ -402,14 +402,14 @@ Builder: PVE LXC K3s Template Generator
 $(cat "$CONFIG_FILE")
 EOF
     
-    log_info "最终清理完成"
+    log_info "$COMPONENT" "最终清理完成"
 }
 
 # 验证构建结果
 verify_build() {
     show_progress "验证构建结果"
     
-    log_info "验证构建结果"
+    log_info "$COMPONENT" "验证构建结果"
     
     local errors=0
     
@@ -423,10 +423,10 @@ verify_build() {
     
     for path in "${critical_paths[@]}"; do
         if [[ ! -e "${BUILD_DIR}/rootfs${path}" ]]; then
-            log_error "关键路径不存在: $path"
+            log_error "$COMPONENT" "关键路径不存在: $path"
             ((errors++))
         else
-            log_info "✓ 验证通过: $path"
+            log_info "$COMPONENT" "✓ 验证通过: $path"
         fi
     done
     
@@ -435,34 +435,34 @@ verify_build() {
         local k3s_version
         k3s_version=$(chroot "${BUILD_DIR}/rootfs" /usr/local/bin/k3s --version | head -n1 | awk '{print $3}')
         if [[ "$k3s_version" == "$K3S_VERSION" ]]; then
-            log_info "✓ K3s 版本验证通过: $k3s_version"
+            log_info "$COMPONENT" "✓ K3s 版本验证通过: $k3s_version"
         else
-            log_error "K3s 版本不匹配: 期望 $K3S_VERSION, 实际 $k3s_version"
+            log_error "$COMPONENT" "K3s 版本不匹配: 期望 $K3S_VERSION, 实际 $k3s_version"
             ((errors++))
         fi
     else
-        log_error "K3s 二进制文件不存在或不可执行"
+        log_error "$COMPONENT" "K3s 二进制文件不存在或不可执行"
         ((errors++))
     fi
     
     # 检查配置文件
     if [[ -f "${BUILD_DIR}/rootfs/etc/rancher/k3s/config.yaml" ]]; then
-        log_info "✓ K3s 配置文件存在"
+        log_info "$COMPONENT" "✓ K3s 配置文件存在"
     else
-        log_error "K3s 配置文件不存在"
+        log_error "$COMPONENT" "K3s 配置文件不存在"
         ((errors++))
     fi
     
     # 计算根文件系统大小
     local rootfs_size
     rootfs_size=$(du -sh "${BUILD_DIR}/rootfs" | cut -f1)
-    log_info "根文件系统大小: $rootfs_size"
+    log_info "$COMPONENT" "根文件系统大小: $rootfs_size"
     
     if [[ $errors -eq 0 ]]; then
-        log_info "✓ 构建验证通过"
+        log_info "$COMPONENT" "✓ 构建验证通过"
         return 0
     else
-        log_error "构建验证失败，发现 $errors 个错误"
+        log_error "$COMPONENT" "构建验证失败，发现 $errors 个错误"
         return 1
     fi
 }
@@ -471,7 +471,7 @@ verify_build() {
 generate_build_report() {
     local report_file="${BUILD_DIR}/build-report.txt"
     
-    log_info "生成构建报告: $report_file"
+    log_info "$COMPONENT" "生成构建报告: $report_file"
     
     cat > "$report_file" << EOF
 # PVE LXC K3s Template Build Report
@@ -513,16 +513,16 @@ Build Log: $BUILD_LOG
 
 EOF
     
-    log_info "构建报告生成完成"
+    log_info "$COMPONENT" "构建报告生成完成"
 }
 
 # 主构建函数
 main() {
     local start_time=$SECONDS
     
-    log_info "=========================================="
-    log_info "PVE LXC K3s Template Builder 开始构建"
-    log_info "=========================================="
+    log_info "$COMPONENT" "=========================================="
+    log_info "$COMPONENT" "PVE LXC K3s Template Builder 开始构建"
+    log_info "$COMPONENT" "=========================================="
     
     # 执行构建步骤
     load_configuration
@@ -538,12 +538,12 @@ main() {
     
     # 验证构建结果
     if verify_build; then
-        log_info "构建成功完成"
+        log_info "$COMPONENT" "构建成功完成"
         generate_build_report
         
         local build_time=$((SECONDS - start_time))
-        log_info "总构建时间: $((build_time / 60)) 分钟 $((build_time % 60)) 秒"
-        log_info "构建输出目录: $BUILD_DIR"
+        log_info "$COMPONENT" "总构建时间: $((build_time / 60)) 分钟 $((build_time % 60)) 秒"
+        log_info "$COMPONENT" "构建输出目录: $BUILD_DIR"
         
         # 清理成功标志
         trap - EXIT
@@ -605,7 +605,7 @@ parse_arguments() {
                 shift
                 ;;
             --clean)
-                log_info "清理缓存目录"
+                log_info "$COMPONENT" "清理缓存目录"
                 rm -rf "$CACHE_DIR"
                 shift
                 ;;
@@ -614,7 +614,7 @@ parse_arguments() {
                 exit 0
                 ;;
             *)
-                log_error "未知选项: $1"
+                log_error "$COMPONENT" "未知选项: $1"
                 show_help
                 exit 1
                 ;;
