@@ -25,6 +25,12 @@ help:
 	@echo "  test-integration - Run integration tests"
 	@echo "  test-system    - Run system tests"
 	@echo "  test-system-mock - Run system tests in mock mode"
+	@echo "  release-build  - Build release artifacts"
+	@echo "  release-package - Package release files"
+	@echo "  release-create - Create complete release"
+	@echo "  release-upload - Upload to GitHub Releases"
+	@echo "  release-prerelease - Create pre-release"
+	@echo "  release-draft  - Create draft release"
 	@echo "  deploy-single  - Deploy single-node cluster"
 	@echo "  deploy-multi   - Deploy multi-node cluster"
 	@echo "  deploy-cleanup - Clean up deployments"
@@ -143,6 +149,43 @@ package-verify:
 package-clean:
 	@echo "Cleaning package output..."
 	@$(SCRIPTS_DIR)/packager.sh clean
+
+# Release targets
+.PHONY: release-build
+release-build:
+	@echo "Building release artifacts..."
+	@$(SCRIPTS_DIR)/create-release.sh build
+
+.PHONY: release-package
+release-package: release-build
+	@echo "Packaging release..."
+	@$(SCRIPTS_DIR)/create-release.sh package
+
+.PHONY: release-create
+release-create: release-package
+	@echo "Creating release..."
+	@read -p "Enter release tag (e.g., v1.0.0): " tag; \
+	$(SCRIPTS_DIR)/create-release.sh create $$tag
+
+.PHONY: release-upload
+release-upload: release-package
+	@echo "Uploading to GitHub Releases..."
+	@read -p "Enter release tag (e.g., v1.0.0): " tag; \
+	read -p "Enter GitHub repository (owner/repo): " repo; \
+	read -s -p "Enter GitHub token: " token; echo; \
+	$(SCRIPTS_DIR)/create-release.sh upload $$tag --github-repo $$repo --github-token $$token
+
+.PHONY: release-prerelease
+release-prerelease: release-package
+	@echo "Creating pre-release..."
+	@read -p "Enter pre-release tag (e.g., v1.0.0-beta): " tag; \
+	$(SCRIPTS_DIR)/create-release.sh create $$tag --prerelease
+
+.PHONY: release-draft
+release-draft: release-package
+	@echo "Creating draft release..."
+	@read -p "Enter release tag (e.g., v1.0.0): " tag; \
+	$(SCRIPTS_DIR)/create-release.sh create $$tag --draft
 
 # Deployment targets
 .PHONY: deploy-single

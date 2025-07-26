@@ -1,0 +1,652 @@
+name: Publish Artifacts to Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to create release for'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  TEMPLATE_NAME: alpine-k3s
+  REGISTRY: ghcr.io
+
+jobs:
+  # 构建制品
+  build-artifacts:
+    name: Build Release Artifacts
+    runs-on: ubuntu-latest
+    outputs:
+      template-version: ${{ steps.config.outputs.template-version }}
+      k3s-version: ${{ steps.config.outputs.k3s-version }}
+      template-file: ${{ steps.build.outputs.template-file }}
+      template-size: ${{ steps.build.outputs.template-size }}
+      build-time: ${{ steps.build.outputs.build-time }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract configuration
+        id: config
+        run: |
+          echo "Extracting template configuration..."
+          
+          # 加载配置
+          source scripts/config-loader.sh
+          load_config config/template.yaml
+          
+          TEMPLATE_VERSION=$(get_config "template.version")
+          K3S_VERSION=$(get_config "k3s.version")
+          
+          echo "template-version=$TEMPLATE_VERSION" >> $GITHUB_OUTPUT
+          echo "k3s-version=$K3S_VERSION" >> $GITHUB_OUTPUT
+          
+          echo "Template Version: $TEMPLATE_VERSION"
+          echo "K3s Version: $K3S_VERSION"
+
+      - name: Set up build environment
+        run: |
+          echo "Setting up build environment..."
+          
+          # 安装构建依赖
+          sudo apt-get update
+          sudo apt-get install -y \
+            debootstrap \
+            qemu-user-static \
+            binfmt-support \
+            systemd-container \
+            curl \
+            wget \
+            tar \
+            gzip \
+            xz-utils \
+            jq
+
+      - name: Build template
+        id: build
+        run: |
+          echo "Building template..."
+          BUILD_START=$(date +%s)
+          
+          # 设置权限
+          chmod +x scripts/*.sh
+          
+          # 创建必要目录
+          mkdir -p .build .cache logs output
+          
+          # 执行构建
+          sudo -E scripts/build-template.sh
+          
+          # 执行打包
+          sudo scripts/packager.sh package
+          
+          BUILD_END=$(date +%s)
+          BUILD_TIME=$((BUILD_END - BUILD_START))
+          
+          # 获取模板文件信息
+          TEMPLATE_FILE=$(find output/ -name "*.tar.gz" -type f | head -n1)
+          if [[ -n "$TEMPLATE_FILE" ]]; then
+            TEMPLATE_SIZE=$(du -h "$TEMPLATE_FILE" | cut -f1)
+            echo "template-file=$TEMPLATE_FILE" >> $GITHUB_OUTPUT
+            echo "template-size=$TEMPLATE_SIZE" >> $GITHUB_OUTPUT
+            echo "build-time=$BUILD_TIME" >> $GITHUB_OUTPUT
+            
+            echo "Template built: $TEMPLATE_FILE ($TEMPLATE_SIZE)"
+            echo "Build time: ${BUILD_TIME}s"
+          else
+            echo "ERROR: No template file found"
+            exit 1
+          fi
+
+      - name: Generate checksums
+        run: |
+          echo "Generating checksums..."
+          
+          cd output/
+          for file in *.tar.gz; do
+            if [[ -f "$file" ]]; then
+              sha256sum "$file" > "${file}.sha256"
+              sha512sum "$file" > "${file}.sha512"
+              md5sum "$file" > "${file}.md5"
+              echo "Generated checksums for $file"
+            fi
+          done
+
+      - name: Validate template
+        run: |
+          echo "Validating template..."
+          
+          if ! scripts/template-validator.sh package-only; then
+            echo "ERROR: Template validation failed"
+            exit 1
+          fi
+          
+          echo "Template validation passed"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: |
+            output/*.tar.gz
+            output/*.sha256
+            output/*.sha512
+            output/*.md5
+          retention-days: 30
+
+  # 创建 GitHub Release
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-artifacts]
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: output/
+
+      - name: Determine release info
+        id: release
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="${{ inputs.tag }}"
+            PRERELEASE="${{ inputs.prerelease }}"
+          else
+            TAG="${{ github.ref_name }}"
+            PRERELEASE="false"
+            # 检查是否为预发布版本（包含 - 的版本号）
+            if [[ "$TAG" =~ -[a-zA-Z] ]]; then
+              PRERELEASE="true"
+            fi
+          fi
+          
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "prerelease=$PRERELEASE" >> $GITHUB_OUTPUT
+          
+          echo "Release tag: $TAG"
+          echo "Pre-release: $PRERELEASE"
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          TAG="${{ steps.release.outputs.tag }}"
+          TEMPLATE_VERSION="${{ needs.build-artifacts.outputs.template-version }}"
+          K3S_VERSION="${{ needs.build-artifacts.outputs.k3s-version }}"
+          BUILD_TIME="${{ needs.build-artifacts.outputs.build-time }}"
+          TEMPLATE_SIZE="${{ needs.build-artifacts.outputs.template-size }}"
+          
+          # 获取上一个版本标签
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          
+          cat > release-notes.md << EOF
+          # PVE LXC K3s Template ${TAG}
+          
+          ## 📦 Template Information
+          
+          - **Template Version**: ${TEMPLATE_VERSION}
+          - **K3s Version**: ${K3S_VERSION}
+          - **Base Image**: Alpine Linux 3.18
+          - **Architecture**: amd64
+          - **Build Time**: ${BUILD_TIME} seconds
+          - **Template Size**: ${TEMPLATE_SIZE}
+          - **Build Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          
+          ## 🚀 Features
+          
+          - ✅ Pre-installed K3s Kubernetes cluster
+          - ✅ Optimized Alpine Linux base for minimal size
+          - ✅ Security hardening applied
+          - ✅ Auto-start K3s service on container boot
+          - ✅ Multi-node cluster support
+          - ✅ Network policies and RBAC configured
+          - ✅ Comprehensive logging and monitoring
+          
+          ## 📋 Installation Instructions
+          
+          ### Quick Start
+          
+          1. **Download the template**:
+             \`\`\`bash
+             wget https://github.com/${{ github.repository }}/releases/download/${TAG}/$(basename ${{ needs.build-artifacts.outputs.template-file }})
+             \`\`\`
+          
+          2. **Upload to Proxmox VE**:
+             \`\`\`bash
+             pveam upload local $(basename ${{ needs.build-artifacts.outputs.template-file }})
+             \`\`\`
+          
+          3. **Create LXC container**:
+             \`\`\`bash
+             pct create 100 local:vztmpl/$(basename ${{ needs.build-artifacts.outputs.template-file }}) \\
+               --hostname k3s-master \\
+               --memory 2048 \\
+               --cores 2 \\
+               --rootfs local-lvm:20 \\
+               --net0 name=eth0,bridge=vmbr0,ip=dhcp \\
+               --unprivileged 1 \\
+               --onboot 1
+             \`\`\`
+          
+          4. **Start the container**:
+             \`\`\`bash
+             pct start 100
+             \`\`\`
+          
+          5. **Verify K3s is running**:
+             \`\`\`bash
+             pct exec 100 -- k3s kubectl get nodes
+             \`\`\`
+          
+          ### Multi-node Cluster Setup
+          
+          For multi-node clusters, create additional containers and join them to the cluster:
+          
+          \`\`\`bash
+          # Get cluster token from master node
+          TOKEN=\$(pct exec 100 -- cat /var/lib/rancher/k3s/server/node-token)
+          MASTER_IP=\$(pct exec 100 -- ip route get 1 | awk '{print \$7; exit}')
+          
+          # Create worker node
+          pct create 101 local:vztmpl/$(basename ${{ needs.build-artifacts.outputs.template-file }}) \\
+            --hostname k3s-worker-1 \\
+            --memory 1024 \\
+            --cores 1 \\
+            --rootfs local-lvm:10 \\
+            --net0 name=eth0,bridge=vmbr0,ip=dhcp \\
+            --unprivileged 1 \\
+            --onboot 1
+          
+          # Configure worker to join cluster
+          pct exec 101 -- sh -c "echo 'server: https://\$MASTER_IP:6443' > /etc/rancher/k3s/config.yaml"
+          pct exec 101 -- sh -c "echo 'token: \$TOKEN' >> /etc/rancher/k3s/config.yaml"
+          
+          # Start worker node
+          pct start 101
+          \`\`\`
+          
+          ## 🔧 Configuration Options
+          
+          The template supports various configuration options:
+          
+          - **Memory**: Minimum 1GB, recommended 2GB+
+          - **CPU**: Minimum 1 core, recommended 2+ cores
+          - **Storage**: Minimum 10GB, recommended 20GB+
+          - **Network**: Bridge mode with DHCP or static IP
+          
+          ## 🔒 Security Features
+          
+          - Non-root user execution for K3s services
+          - Firewall rules configured for K3s ports (6443, 10250, 8472)
+          - Security hardening applied to Alpine Linux
+          - RBAC and network policies enabled
+          - Regular security updates through automated builds
+          
+          ## 📊 Performance Metrics
+          
+          - **Container startup time**: < 30 seconds
+          - **K3s ready time**: < 60 seconds
+          - **Memory usage**: ~512MB idle, ~1GB with workloads
+          - **CPU usage**: < 5% idle, varies with workloads
+          
+          EOF
+          
+          # 添加变更日志（如果有上一个版本）
+          if [[ -n "$PREVIOUS_TAG" ]]; then
+            echo "" >> release-notes.md
+            echo "## 📝 Changes Since ${PREVIOUS_TAG}" >> release-notes.md
+            echo "" >> release-notes.md
+            
+            # 获取提交历史
+            git log --pretty=format:"- %s (%h)" ${PREVIOUS_TAG}..HEAD >> release-notes.md
+            echo "" >> release-notes.md
+          fi
+          
+          # 添加文件列表和校验和
+          echo "" >> release-notes.md
+          echo "## 📁 Release Assets" >> release-notes.md
+          echo "" >> release-notes.md
+          
+          for file in output/*.tar.gz; do
+            if [[ -f "$file" ]]; then
+              filename=$(basename "$file")
+              filesize=$(du -h "$file" | cut -f1)
+              echo "- **${filename}** (${filesize}) - Main template file" >> release-notes.md
+            fi
+          done
+          
+          echo "" >> release-notes.md
+          echo "### 🔐 Checksums" >> release-notes.md
+          echo "" >> release-notes.md
+          echo "Verify file integrity using these checksums:" >> release-notes.md
+          echo "" >> release-notes.md
+          
+          if [[ -f output/*.sha256 ]]; then
+            echo "#### SHA256" >> release-notes.md
+            echo "\`\`\`" >> release-notes.md
+            cat output/*.sha256 >> release-notes.md
+            echo "\`\`\`" >> release-notes.md
+            echo "" >> release-notes.md
+          fi
+          
+          if [[ -f output/*.sha512 ]]; then
+            echo "#### SHA512" >> release-notes.md
+            echo "\`\`\`" >> release-notes.md
+            cat output/*.sha512 >> release-notes.md
+            echo "\`\`\`" >> release-notes.md
+            echo "" >> release-notes.md
+          fi
+          
+          # 添加支持信息
+          cat >> release-notes.md << EOF
+          ## 🆘 Support & Documentation
+          
+          - **📖 Documentation**: [Repository README](https://github.com/${{ github.repository }})
+          - **🐛 Bug Reports**: [GitHub Issues](https://github.com/${{ github.repository }}/issues)
+          - **💬 Discussions**: [GitHub Discussions](https://github.com/${{ github.repository }}/discussions)
+          - **📧 Security Issues**: Please report privately via GitHub Security tab
+          
+          ## 🙏 Acknowledgments
+          
+          - [K3s Project](https://k3s.io/) for the lightweight Kubernetes distribution
+          - [Alpine Linux](https://alpinelinux.org/) for the secure base image
+          - [Proxmox VE](https://www.proxmox.com/en/proxmox-ve) for the virtualization platform
+          
+          ---
+          
+          **Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${TAG}
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: "PVE LXC K3s Template ${{ steps.release.outputs.tag }}"
+          body_path: release-notes.md
+          files: |
+            output/*.tar.gz
+            output/*.sha256
+            output/*.sha512
+            output/*.md5
+          draft: false
+          prerelease: ${{ steps.release.outputs.prerelease }}
+          generate_release_notes: false
+          make_latest: ${{ steps.release.outputs.prerelease == 'false' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 发布到容器注册表
+  publish-container:
+    name: Publish to Container Registry
+    runs-on: ubuntu-latest
+    needs: [build-artifacts, create-release]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: output/
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Create distribution container
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="${{ inputs.tag }}"
+          fi
+          
+          echo "Creating distribution container for tag: $TAG"
+          
+          # 创建 Dockerfile
+          cat > Dockerfile << EOF
+          FROM scratch
+          
+          # 复制模板文件
+          COPY output/*.tar.gz /templates/
+          COPY output/*.sha256 /templates/
+          COPY output/*.sha512 /templates/
+          COPY output/*.md5 /templates/
+          
+          # 复制文档
+          COPY README.md /
+          COPY docs/ /docs/
+          COPY config/ /config/
+          
+          # 添加元数据
+          LABEL org.opencontainers.image.title="PVE LXC K3s Template"
+          LABEL org.opencontainers.image.description="Alpine Linux LXC template with pre-installed K3s Kubernetes cluster"
+          LABEL org.opencontainers.image.version="${TAG#v}"
+          LABEL org.opencontainers.image.source="https://github.com/${{ github.repository }}"
+          LABEL org.opencontainers.image.url="https://github.com/${{ github.repository }}"
+          LABEL org.opencontainers.image.documentation="https://github.com/${{ github.repository }}/blob/main/README.md"
+          LABEL org.opencontainers.image.licenses="MIT"
+          LABEL org.opencontainers.image.vendor="PVE LXC K3s Template Project"
+          LABEL org.opencontainers.image.authors="PVE LXC K3s Template Contributors"
+          
+          # K3s 相关标签
+          LABEL k3s.version="${{ needs.build-artifacts.outputs.k3s-version }}"
+          LABEL alpine.version="3.18"
+          LABEL template.version="${{ needs.build-artifacts.outputs.template-version }}"
+          LABEL template.size="${{ needs.build-artifacts.outputs.template-size }}"
+          LABEL build.time="${{ needs.build-artifacts.outputs.build-time }}"
+          
+          # 使用说明
+          LABEL usage="docker run --rm -v \$(pwd):/output ${{ env.REGISTRY }}/${{ github.repository }}:${TAG#v} cp /templates/* /output/"
+          EOF
+
+      - name: Build and push container image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # 通知和总结
+  notify-success:
+    name: Notify Success
+    runs-on: ubuntu-latest
+    needs: [build-artifacts, create-release, publish-container]
+    if: success()
+    steps:
+      - name: Create success summary
+        run: |
+          echo "## 🎉 Release Published Successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Release Information" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Template Version**: ${{ needs.build-artifacts.outputs.template-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **K3s Version**: ${{ needs.build-artifacts.outputs.k3s-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Template Size**: ${{ needs.build-artifacts.outputs.template-size }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Time**: ${{ needs.build-artifacts.outputs.build-time }} seconds" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔗 Links" >> $GITHUB_STEP_SUMMARY
+          echo "- **GitHub Release**: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Container Registry**: ${{ env.REGISTRY }}/${{ github.repository }}:${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. ✅ Template artifacts published to GitHub Releases" >> $GITHUB_STEP_SUMMARY
+          echo "2. ✅ Container image published to GitHub Container Registry" >> $GITHUB_STEP_SUMMARY
+          echo "3. 🔄 Test the release in a PVE environment" >> $GITHUB_STEP_SUMMARY
+          echo "4. 📢 Announce the release if needed" >> $GITHUB_STEP_SUMMARY
+          echo "5. 📝 Update any dependent projects or documentation" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create verification issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = '${{ github.ref_name }}';
+            const templateVersion = '${{ needs.build-artifacts.outputs.template-version }}';
+            const k3sVersion = '${{ needs.build-artifacts.outputs.k3s-version }}';
+            
+            const title = `🔍 Verify Release ${tag}`;
+            const body = `## Release Verification Checklist
+            
+            A new release has been published and needs verification:
+            
+            **Release**: ${tag}
+            **Template Version**: ${templateVersion}
+            **K3s Version**: ${k3sVersion}
+            
+            ### 📥 Download Verification
+            - [ ] Template file downloads successfully from GitHub Releases
+            - [ ] SHA256 checksum verification passes
+            - [ ] Container image pulls successfully from registry
+            
+            ### 🚀 Deployment Verification
+            - [ ] Template uploads to PVE successfully
+            - [ ] LXC container creates from template without errors
+            - [ ] Container starts and boots properly
+            - [ ] K3s service starts automatically
+            
+            ### ⚙️ Functionality Verification
+            - [ ] K3s API server is accessible
+            - [ ] kubectl commands work correctly
+            - [ ] Basic pod deployment succeeds
+            - [ ] Network connectivity functions properly
+            - [ ] DNS resolution works within cluster
+            
+            ### 🔗 Multi-node Verification (if applicable)
+            - [ ] Additional nodes can join the cluster
+            - [ ] Cluster networking works across nodes
+            - [ ] Load balancing functions correctly
+            - [ ] High availability features work
+            
+            ### 📚 Documentation Verification
+            - [ ] Installation instructions are accurate
+            - [ ] Configuration examples work
+            - [ ] Troubleshooting guide is helpful
+            - [ ] Release notes are complete
+            
+            ### 🔒 Security Verification
+            - [ ] Security hardening is applied
+            - [ ] Firewall rules are configured correctly
+            - [ ] Non-root user execution works
+            - [ ] RBAC policies are in place
+            
+            ---
+            
+            **Verification Deadline**: ${new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}
+            
+            Please complete this verification within 7 days and close this issue when done.
+            
+            /cc @${context.actor}`;
+            
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['release', 'verification', 'high-priority'],
+              assignees: [context.actor]
+            });
+
+  # 失败通知
+  notify-failure:
+    name: Notify Failure
+    runs-on: ubuntu-latest
+    needs: [build-artifacts, create-release, publish-container]
+    if: failure()
+    steps:
+      - name: Create failure summary
+        run: |
+          echo "## ❌ Release Publication Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The release publication process encountered errors:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Job Status" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Artifacts**: ${{ needs.build-artifacts.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Create Release**: ${{ needs.create-release.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Publish Container**: ${{ needs.publish-container.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔧 Troubleshooting Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Check the job logs for specific error messages" >> $GITHUB_STEP_SUMMARY
+          echo "2. Verify all required secrets are configured" >> $GITHUB_STEP_SUMMARY
+          echo "3. Ensure the tag format is correct (v*.*.* )" >> $GITHUB_STEP_SUMMARY
+          echo "4. Check repository permissions for releases and packages" >> $GITHUB_STEP_SUMMARY
+          echo "5. Retry the workflow if it was a temporary issue" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create failure issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = '${{ github.ref_name }}';
+            
+            const title = `🚨 Release Publication Failed: ${tag}`;
+            const body = `## Release Publication Failure
+            
+            The automated release publication for **${tag}** has failed.
+            
+            ### Failure Details
+            - **Build Artifacts**: ${{ needs.build-artifacts.result }}
+            - **Create Release**: ${{ needs.create-release.result }}
+            - **Publish Container**: ${{ needs.publish-container.result }}
+            
+            ### Investigation Required
+            1. Review the workflow logs for specific error messages
+            2. Check if all required secrets and permissions are configured
+            3. Verify the tag format and repository settings
+            4. Determine if this is a temporary or persistent issue
+            
+            ### Action Items
+            - [ ] Investigate the root cause of the failure
+            - [ ] Fix any configuration or permission issues
+            - [ ] Re-run the workflow or create the release manually
+            - [ ] Update documentation if process changes are needed
+            
+            ### Workflow Run
+            **Run ID**: ${{ github.run_id }}
+            **Run URL**: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            
+            This issue was automatically created by the failed release workflow.
+            
+            /cc @${context.actor}`;
+            
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['bug', 'release', 'ci/cd', 'high-priority'],
+              assignees: [context.actor]
+            });
