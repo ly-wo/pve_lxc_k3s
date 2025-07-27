@@ -77,14 +77,31 @@ get_default_config() {
 # Global configuration cache (using simple variables instead of associative arrays)
 CONFIG_LOADED=false
 CONFIG_CACHE_FILE=""
+CONFIG_CACHE_STATE_FILE="${PROJECT_ROOT}/.cache/config-state-$$"
+
+# Initialize cache directory
+mkdir -p "$(dirname "$CONFIG_CACHE_STATE_FILE")"
 
 # Load configuration with defaults
 load_config() {
     local config_file="${1:-$CONFIG_FILE}"
     
-    if [ "$CONFIG_LOADED" = true ]; then
+    # Check if the same config file is already loaded
+    if [ "$CONFIG_LOADED" = true ] && [ "$CONFIG_CACHE_FILE" = "$config_file" ]; then
         log_info "Configuration already loaded from cache" >&2
         return 0
+    fi
+    
+    # Check file cache for cross-process caching
+    local cached_file=""
+    if [ -f "$CONFIG_CACHE_STATE_FILE" ]; then
+        cached_file=$(cat "$CONFIG_CACHE_STATE_FILE" 2>/dev/null || echo "")
+        if [ "$cached_file" = "$config_file" ]; then
+            log_info "Configuration already loaded from cache" >&2
+            CONFIG_LOADED=true
+            CONFIG_CACHE_FILE="$config_file"
+            return 0
+        fi
     fi
     
     log_info "Loading configuration from: $config_file" >&2
@@ -95,9 +112,10 @@ load_config() {
         return 1
     fi
     
-    # Store config file path for later use
+    # Store config file path for later use (both in memory and file)
     CONFIG_CACHE_FILE="$config_file"
     CONFIG_LOADED=true
+    echo "$config_file" > "$CONFIG_CACHE_STATE_FILE"
     
     log_info "Configuration loaded successfully" >&2
 }
@@ -107,13 +125,19 @@ get_config() {
     local key="$1"
     local default_value="${2:-}"
     
-    # Load config if not already loaded (suppress all output)
-    if [ "$CONFIG_LOADED" = false ]; then
-        load_config >/dev/null 2>&1
+    # Check if we have a cached config file
+    if [ "$CONFIG_LOADED" = false ] && [ -f "$CONFIG_CACHE_STATE_FILE" ]; then
+        CONFIG_CACHE_FILE=$(cat "$CONFIG_CACHE_STATE_FILE" 2>/dev/null || echo "")
+        if [ -n "$CONFIG_CACHE_FILE" ] && [ -f "$CONFIG_CACHE_FILE" ]; then
+            CONFIG_LOADED=true
+        fi
     fi
     
+    # Only auto-load if we have a cached config file, don't auto-load the default
+    # This allows tests to control when config is loaded
+    
     # Try to get from loaded config using yq if available
-    if [ -n "$CONFIG_CACHE_FILE" ] && command -v yq >/dev/null 2>&1; then
+    if [ "$CONFIG_LOADED" = true ] && [ -n "$CONFIG_CACHE_FILE" ] && command -v yq >/dev/null 2>&1; then
         local value
         value=$(yq eval ".$key" "$CONFIG_CACHE_FILE" 2>/dev/null || echo "null")
         if [ "$value" != "null" ] && [ -n "$value" ]; then
@@ -137,11 +161,19 @@ get_config() {
 # Get configuration array
 get_config_array() {
     local key="$1"
-    local value
-    value=$(get_config "$key" "[]")
     
-    # Parse JSON array and return as bash array elements
-    echo "$value" | jq -r '.[]' 2>/dev/null || true
+    # Load config if not already loaded (suppress all output)
+    if [ "$CONFIG_LOADED" = false ]; then
+        load_config >/dev/null 2>&1
+    fi
+    
+    # Try to get array from loaded config using yq if available
+    if [ -n "$CONFIG_CACHE_FILE" ] && command -v yq >/dev/null 2>&1; then
+        yq eval ".${key}[]" "$CONFIG_CACHE_FILE" 2>/dev/null || true
+    else
+        # Fallback: return empty if no yq available
+        true
+    fi
 }
 
 # Get configuration object keys
@@ -291,6 +323,7 @@ EOF
 reset_config() {
     CONFIG_CACHE_FILE=""
     CONFIG_LOADED=false
+    rm -f "$CONFIG_CACHE_STATE_FILE" 2>/dev/null || true
     log_info "Configuration cache reset" >&2
 }
 
