@@ -37,8 +37,26 @@ check_container_environment() {
     fi
 }
 
+# 检测执行环境
+detect_environment() {
+    if command -v apk >/dev/null 2>&1; then
+        echo "alpine"
+    elif [[ -f /etc/alpine-release ]]; then
+        echo "alpine"
+    else
+        echo "host"
+    fi
+}
+
 # 更新包索引
 update_package_index() {
+    local env=$(detect_environment)
+    
+    if [[ "$env" == "host" ]]; then
+        log_info "在主机环境中跳过包索引更新（将在 chroot 中执行）"
+        return 0
+    fi
+    
     log_info "更新包索引"
     
     if ! apk update; then
@@ -50,6 +68,13 @@ update_package_index() {
 
 # 安装必要的系统包
 install_essential_packages() {
+    local env=$(detect_environment)
+    
+    if [[ "$env" == "host" ]]; then
+        log_info "在主机环境中跳过包安装（将在 chroot 中执行）"
+        return 0
+    fi
+    
     log_info "安装必要的系统包"
     
     local essential_packages=(
@@ -81,6 +106,13 @@ install_essential_packages() {
 
 # 安装配置文件中指定的包
 install_configured_packages() {
+    local env=$(detect_environment)
+    
+    if [[ "$env" == "host" ]]; then
+        log_info "在主机环境中跳过配置包安装（将在 chroot 中执行）"
+        return 0
+    fi
+    
     if [[ ! -f "$CONFIG_FILE" ]]; then
         log_warn "配置文件不存在，跳过配置包安装"
         return 0
@@ -114,6 +146,13 @@ install_configured_packages() {
 
 # 移除不必要的包
 remove_unnecessary_packages() {
+    local env=$(detect_environment)
+    
+    if [[ "$env" == "host" ]]; then
+        log_info "在主机环境中跳过包移除（将在 chroot 中执行）"
+        return 0
+    fi
+    
     log_info "移除不必要的包"
     
     # 默认要移除的包
@@ -329,25 +368,32 @@ disable_unnecessary_services() {
 
 # 清理系统文件
 cleanup_system_files() {
+    local env=$(detect_environment)
+    
+    if [[ "$env" == "host" ]]; then
+        log_info "在主机环境中跳过系统文件清理（将在 chroot 中执行）"
+        return 0
+    fi
+    
     log_info "清理系统文件"
     
     # 清理包缓存
-    rm -rf /var/cache/apk/*
-    rm -rf /etc/apk/cache/*
+    rm -rf /var/cache/apk/* 2>/dev/null || true
+    rm -rf /etc/apk/cache/* 2>/dev/null || true
     
     # 清理临时文件
-    rm -rf /tmp/*
-    rm -rf /var/tmp/*
+    rm -rf /tmp/* 2>/dev/null || true
+    rm -rf /var/tmp/* 2>/dev/null || true
     
     # 清理日志文件
     find /var/log -type f -name "*.log" -delete 2>/dev/null || true
     find /var/log -type f -name "*.log.*" -delete 2>/dev/null || true
     
     # 清理文档和手册页
-    rm -rf /usr/share/man/*
-    rm -rf /usr/share/doc/*
-    rm -rf /usr/share/info/*
-    rm -rf /usr/share/gtk-doc/*
+    rm -rf /usr/share/man/* 2>/dev/null || true
+    rm -rf /usr/share/doc/* 2>/dev/null || true
+    rm -rf /usr/share/info/* 2>/dev/null || true
+    rm -rf /usr/share/gtk-doc/* 2>/dev/null || true
     
     # 清理语言文件（保留英文）
     find /usr/share/locale -mindepth 1 -maxdepth 1 -type d ! -name 'en*' -exec rm -rf {} + 2>/dev/null || true
@@ -387,7 +433,20 @@ optimize_binaries() {
 
 # 生成系统信息
 generate_system_info() {
+    local env=$(detect_environment)
+    
+    if [[ "$env" == "host" ]]; then
+        log_info "在主机环境中跳过系统信息生成（将在 chroot 中执行）"
+        return 0
+    fi
+    
     log_info "生成系统信息"
+    
+    # Get package count safely
+    local package_count="Unknown"
+    if command -v apk >/dev/null 2>&1; then
+        package_count=$(apk list --installed 2>/dev/null | wc -l || echo "Unknown")
+    fi
     
     cat > /etc/alpine-k3s-info << EOF
 # Alpine K3s LXC Template Information
@@ -398,7 +457,7 @@ Architecture: $(uname -m)
 Kernel Version: $(uname -r)
 
 # Installed Packages
-$(apk list --installed | wc -l) packages installed
+${package_count} packages installed
 
 # System Optimization Applied:
 - Kernel parameters optimized for K3s
