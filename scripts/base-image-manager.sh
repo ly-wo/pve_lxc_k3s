@@ -125,7 +125,17 @@ download_checksum() {
     
     # Alpine 官方校验和 URL 模式
     if [[ "$image_name" == "alpine" ]]; then
-        local checksum_url="https://dl-cdn.alpinelinux.org/alpine/v${image_tag%.*}/releases/${arch}/alpine-minirootfs-${image_tag}-${arch}.tar.gz.sha256"
+        # 映射架构名称
+        local alpine_arch
+        alpine_arch=$(get_alpine_arch "$arch")
+        
+        # 如果 image_tag 只是主版本号，获取最新的补丁版本
+        local full_version="$image_tag"
+        if [[ "$image_tag" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            full_version=$(get_latest_alpine_version "$image_tag" "$arch")
+        fi
+        
+        local checksum_url="https://dl-cdn.alpinelinux.org/alpine/v${full_version%.*}/releases/${alpine_arch}/alpine-minirootfs-${full_version}-${alpine_arch}.tar.gz.sha256"
         local checksum_file
         checksum_file=$(get_checksum_path "$(get_cache_path "$image_name" "$image_tag" "$arch")")
         
@@ -231,17 +241,64 @@ download_base_image() {
     log_info "镜像下载完成: $cache_path"
 }
 
+# 获取 Alpine 架构名称映射
+get_alpine_arch() {
+    local arch="$1"
+    case "$arch" in
+        "amd64") echo "x86_64" ;;
+        "arm64") echo "aarch64" ;;
+        "armv7") echo "armv7" ;;
+        *) echo "$arch" ;;
+    esac
+}
+
+# 获取最新的 Alpine 版本
+get_latest_alpine_version() {
+    local major_minor="$1"  # 例如 "3.18"
+    local arch="$2"
+    local alpine_arch
+    alpine_arch=$(get_alpine_arch "$arch")
+    
+    local base_url="https://dl-cdn.alpinelinux.org/alpine/v${major_minor}/releases/${alpine_arch}/"
+    
+    # 获取最新版本号
+    local latest_version
+    latest_version=$(curl -s "$base_url" | \
+        grep -o "alpine-minirootfs-${major_minor}\.[0-9]*-${alpine_arch}\.tar\.gz" | \
+        sed "s/alpine-minirootfs-\(${major_minor}\.[0-9]*\)-${alpine_arch}\.tar\.gz/\1/" | \
+        sort -V | tail -1)
+    
+    if [[ -n "$latest_version" ]]; then
+        echo "$latest_version"
+    else
+        # 如果无法获取最新版本，返回基础版本
+        echo "${major_minor}.0"
+    fi
+}
+
 # 下载 Alpine 镜像
 download_alpine_image() {
     local tag="$1"
     local arch="$2"
     local output_path="$3"
     
+    # 映射架构名称
+    local alpine_arch
+    alpine_arch=$(get_alpine_arch "$arch")
+    
+    # 如果 tag 只是主版本号（如 3.18），获取最新的补丁版本
+    local full_version="$tag"
+    if [[ "$tag" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        log_info "检测到主版本号 $tag，获取最新补丁版本..."
+        full_version=$(get_latest_alpine_version "$tag" "$arch")
+        log_info "使用 Alpine 版本: $full_version"
+    fi
+    
     # Alpine minirootfs 下载 URL
     local base_url="https://dl-cdn.alpinelinux.org/alpine"
-    local version_path="v${tag%.*}"  # 3.18 -> v3.18
-    local filename="alpine-minirootfs-${tag}-${arch}.tar.gz"
-    local download_url="${base_url}/${version_path}/releases/${arch}/${filename}"
+    local version_path="v${full_version%.*}"  # 3.18.12 -> v3.18
+    local filename="alpine-minirootfs-${full_version}-${alpine_arch}.tar.gz"
+    local download_url="${base_url}/${version_path}/releases/${alpine_arch}/${filename}"
     
     log_info "从 Alpine 官方源下载: $download_url"
     
