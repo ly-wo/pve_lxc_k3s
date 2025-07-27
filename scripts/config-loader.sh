@@ -15,8 +15,8 @@ if [ -f "${SCRIPT_DIR}/config-validator.sh" ]; then
     source "${SCRIPT_DIR}/config-validator.sh"
 else
     # Fallback logging functions if validator script is not available
-    log_info() { echo -e "\033[0;32m[INFO]\033[0m $1"; }
-    log_warn() { echo -e "\033[1;33m[WARN]\033[0m $1"; }
+    log_info() { echo -e "\033[0;32m[INFO]\033[0m $1" >&2; }
+    log_warn() { echo -e "\033[1;33m[WARN]\033[0m $1" >&2; }
     log_error() { echo -e "\033[0;31m[ERROR]\033[0m $1" >&2; }
     yaml_to_json() { echo "{}"; }
 fi
@@ -83,11 +83,11 @@ load_config() {
     local config_file="${1:-$CONFIG_FILE}"
     
     if [ "$CONFIG_LOADED" = true ]; then
-        log_info "Configuration already loaded from cache"
+        log_info "Configuration already loaded from cache" >&2
         return 0
     fi
     
-    log_info "Loading configuration from: $config_file"
+    log_info "Loading configuration from: $config_file" >&2
     
     # Check if config file exists
     if [ ! -f "$config_file" ]; then
@@ -99,7 +99,7 @@ load_config() {
     CONFIG_CACHE_FILE="$config_file"
     CONFIG_LOADED=true
     
-    log_info "Configuration loaded successfully"
+    log_info "Configuration loaded successfully" >&2
 }
 
 # Get configuration value with default fallback
@@ -107,9 +107,9 @@ get_config() {
     local key="$1"
     local default_value="${2:-}"
     
-    # Load config if not already loaded
+    # Load config if not already loaded (suppress all output)
     if [ "$CONFIG_LOADED" = false ]; then
-        load_config
+        load_config >/dev/null 2>&1
     fi
     
     # Try to get from loaded config using yq if available
@@ -228,7 +228,7 @@ export_config() {
     export "${prefix}INCLUDE_DOCS"=$(get_config "build.include_docs")
     export "${prefix}PARALLEL_JOBS"=$(get_config "build.parallel_jobs")
     
-    log_info "Configuration exported with prefix: $prefix"
+    log_info "Configuration exported with prefix: $prefix" >&2
 }
 
 # Generate configuration report
@@ -281,7 +281,7 @@ EOF
     
     if [ -n "$output_file" ]; then
         echo "$report" > "$output_file"
-        log_info "Configuration report saved to: $output_file"
+        log_info "Configuration report saved to: $output_file" >&2
     else
         echo "$report"
     fi
@@ -291,7 +291,7 @@ EOF
 reset_config() {
     CONFIG_CACHE_FILE=""
     CONFIG_LOADED=false
-    log_info "Configuration cache reset"
+    log_info "Configuration cache reset" >&2
 }
 
 # Show configuration help
