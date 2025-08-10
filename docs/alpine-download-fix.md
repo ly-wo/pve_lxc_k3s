@@ -68,7 +68,7 @@ https://dl-cdn.alpinelinux.org/alpine/v3.18/releases/x86_64/alpine-minirootfs-3.
 
 ### URL Accessibility Test
 ```bash
-✅ Latest Alpine 3.18 version: 3.18.12
+✅ Latest Alpine  version: 3.18.12
 ✅ Alpine architecture for amd64: x86_64
 ✅ Download URL: https://dl-cdn.alpinelinux.org/alpine/v3.18/releases/x86_64/alpine-minirootfs-3.18.12-x86_64.tar.gz
 ✅ URL is accessible
