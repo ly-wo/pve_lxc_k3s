@@ -147,7 +147,7 @@ Tests template deployment process:
 ### 3. K3s Functionality
 
 Validates K3s cluster operations:
-- K3s service status
+- K3s ervice status
 - API server health
 - Node readiness
 - System pods status
@@ -184,7 +184,7 @@ Measures system performance:
 
 Validates cross-version compatibility:
 - Alpine Linux versions
-- K3s versions
+- K3s ersions
 - PVE versions
 - Container configurations
 - Network configurations
@@ -290,7 +290,7 @@ pvesm list local | grep vztmpl
 
 #### K3s Issues
 ```bash
-# Check K3s service status
+# Check K3s ervice status
 pct exec 9000 -- systemctl status k3s
 
 # Check K3s logs
